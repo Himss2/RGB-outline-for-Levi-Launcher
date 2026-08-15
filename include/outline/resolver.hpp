@@ -1,20 +1,35 @@
 #pragma once
 
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
+#include <string_view>
 #include <vector>
 
-namespace OutlineResolver {
+namespace outline::resolver {
 
 struct Candidate {
-    uintptr_t address = 0;
-    int score = 0;
+    std::uintptr_t address{};
+    int score{};
 };
 
-bool initialize();
+bool initialize(std::string_view libraryName);
 
-uintptr_t findOutlineCandidate();
+bool ready();
 
-const std::vector<Candidate>& candidates();
+std::uintptr_t libraryBase();
+
+std::uintptr_t renderLevel();
+
+std::uintptr_t tessellatorBegin();
+
+std::uintptr_t tessellatorColor();
+
+std::uintptr_t tessellatorVertex();
+
+std::uintptr_t meshRenderImmediately();
+
+std::uintptr_t blockGetOutline();
+
+const std::vector<Candidate>& blockOutlineCandidates();
 
 }
