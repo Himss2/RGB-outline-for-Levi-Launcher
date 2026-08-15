@@ -8,34 +8,38 @@ import sys
 
 
 # ============================================================
-# Project paths
+# Project configuration
 # ============================================================
 
 ROOT = Path(__file__).resolve().parent.parent
 
-DIST_DIR = ROOT / "dist"
-PACKAGE_PATH = DIST_DIR / "OutlineRGB.levipack"
-
-MANIFEST_PATH = ROOT / "manifest.json"
-
 BUILD_DIR = ROOT / "build"
+DIST_DIR = ROOT / "dist"
 
+PACKAGE_NAME = "OutlineRGB.levipack"
+PACKAGE_PATH = DIST_DIR / PACKAGE_NAME
 
-# ============================================================
-# Configuration
-# ============================================================
+PACKAGE_SO_NAME = "libOutlineRGB.so"
 
 PACKAGE_LIB_DIR = Path("lib") / "arm64-v8a"
 
-# Expected output name inside the LeviPack.
-PACKAGE_SO_NAME = "libOutlineRGB.so"
-
 
 # ============================================================
-# Helpers
+# Output helpers
 # ============================================================
 
-def fail(message: str) -> None:
+def info(message=""):
+    print(message)
+
+
+def section(title):
+    print()
+    print("=" * 40)
+    print(title)
+    print("=" * 40)
+
+
+def fail(message):
     print()
     print("ERROR:")
     print(message)
@@ -43,155 +47,335 @@ def fail(message: str) -> None:
     sys.exit(1)
 
 
-def find_shared_library() -> Path:
-    """
-    Locate the ARM64 shared library produced by Xmake.
+# ============================================================
+# Manifest discovery
+# ============================================================
 
-    We search recursively inside build/ instead of hardcoding
-    Xmake's generated directory structure because that structure
-    can vary between configurations.
+def find_manifest():
     """
+    Find manifest.json automatically.
+
+    We do not assume that manifest.json is located at the
+    repository root.
+
+    Candidate locations are checked first, followed by a
+    recursive search.
+    """
+
+    section("Searching manifest.json")
+
+    candidates = [
+        ROOT / "manifest.json",
+        ROOT / "assets" / "manifest.json",
+        ROOT / "asset" / "manifest.json",
+        ROOT / "levipack" / "manifest.json",
+        ROOT / "pack" / "manifest.json",
+        ROOT / "package" / "manifest.json",
+        ROOT / "packages" / "manifest.json",
+        ROOT / "resources" / "manifest.json",
+    ]
+
+    checked = set()
+
+    for candidate in candidates:
+        candidate = candidate.resolve()
+
+        if candidate in checked:
+            continue
+
+        checked.add(candidate)
+
+        if candidate.is_file():
+            info(f"Found manifest:")
+            info(f"  {candidate.relative_to(ROOT)}")
+            return candidate
+
+    # Recursive search as fallback.
+    recursive_matches = sorted(
+        p for p in ROOT.rglob("manifest.json")
+        if p.is_file()
+        and ".git" not in p.parts
+        and "build" not in p.parts
+        and "dist" not in p.parts
+    )
+
+    if not recursive_matches:
+        info("No manifest.json found.")
+        info()
+        info("Repository files at root:")
+
+        for item in sorted(ROOT.iterdir()):
+            info(f"  {item.name}")
+
+        fail(
+            "manifest.json could not be located.\n"
+            "Make sure the repository contains a LeviPack manifest."
+        )
+
+    if len(recursive_matches) == 1:
+        manifest = recursive_matches[0]
+
+        info("Found manifest:")
+        info(f"  {manifest.relative_to(ROOT)}")
+
+        return manifest
+
+    info("Multiple manifest.json files were found:")
+
+    for manifest in recursive_matches:
+        info(f"  - {manifest.relative_to(ROOT)}")
+
+    # Prefer a manifest outside examples/tests/templates.
+    preferred = [
+        p for p in recursive_matches
+        if not any(
+            part.lower() in {
+                "example",
+                "examples",
+                "test",
+                "tests",
+                "template",
+                "templates",
+            }
+            for part in p.parts
+        )
+    ]
+
+    if len(preferred) == 1:
+        manifest = preferred[0]
+
+        info()
+        info("Selected:")
+        info(f"  {manifest.relative_to(ROOT)}")
+
+        return manifest
+
+    fail(
+        "Multiple manifest.json files were found and the correct "
+        "one could not be determined automatically."
+    )
+
+
+# ============================================================
+# Manifest validation
+# ============================================================
+
+def load_manifest(manifest_path):
+    try:
+        with manifest_path.open(
+            "r",
+            encoding="utf-8",
+        ) as file:
+            manifest = json.load(file)
+
+    except UnicodeDecodeError as exc:
+        fail(
+            f"Could not decode manifest.json as UTF-8:\n{exc}"
+        )
+
+    except json.JSONDecodeError as exc:
+        fail(
+            "manifest.json contains invalid JSON:\n"
+            f"{exc}"
+        )
+
+    if not isinstance(manifest, dict):
+        fail(
+            "manifest.json must contain a JSON object."
+        )
+
+    return manifest
+
+
+def validate_manifest(manifest):
+    section("Validating manifest")
+
+    if "name" in manifest:
+        info(f"name    : {manifest['name']}")
+    else:
+        info("Warning: manifest has no 'name' field.")
+
+    if "version" in manifest:
+        info(f"version : {manifest['version']}")
+    else:
+        info("Warning: manifest has no 'version' field.")
+
+    info("Manifest JSON: OK")
+
+
+# ============================================================
+# Shared library discovery
+# ============================================================
+
+def find_shared_libraries():
+    section("Searching Android ARM64 libraries")
 
     if not BUILD_DIR.exists():
-        fail(f"Build directory does not exist: {BUILD_DIR}")
+        fail(
+            f"Build directory does not exist:\n"
+            f"{BUILD_DIR}"
+        )
 
-    candidates = sorted(
+    libraries = sorted(
         p for p in BUILD_DIR.rglob("*.so")
         if p.is_file()
     )
 
-    if not candidates:
+    if not libraries:
         fail(
-            "No .so file was found under build/.\n"
-            "Make sure the Android ARM64 build completed successfully."
+            "No .so files were found under build/.\n"
+            "The Android ARM64 build probably did not produce "
+            "a shared library."
         )
 
-    print("Found shared libraries:")
-    for candidate in candidates:
-        print(f"  - {candidate.relative_to(ROOT)}")
+    info("Found .so files:")
 
-    # Prefer an already correctly named library.
+    for library in libraries:
+        info(
+            f"  - {library.relative_to(ROOT)}"
+        )
+
+    return libraries
+
+
+def select_shared_library(libraries):
+    """
+    Select the OutlineRGB shared library.
+
+    Priority:
+      1. exact libOutlineRGB.so
+      2. exact OutlineRGB.so
+      3. filename containing OutlineRGB
+      4. only .so available
+    """
+
     preferred_names = [
         "libOutlineRGB.so",
         "OutlineRGB.so",
     ]
 
-    for preferred_name in preferred_names:
-        for candidate in candidates:
-            if candidate.name == preferred_name:
-                return candidate
+    for preferred in preferred_names:
+        matches = [
+            p for p in libraries
+            if p.name == preferred
+        ]
 
-    # If there is only one .so, use it.
-    if len(candidates) == 1:
-        return candidates[0]
+        if len(matches) == 1:
+            return matches[0]
 
-    # Otherwise prefer names containing OutlineRGB / outline.
-    outline_candidates = [
-        p for p in candidates
+    outline_matches = [
+        p for p in libraries
         if "outlinergb" in p.name.lower()
-        or "outline" in p.name.lower()
     ]
 
-    if len(outline_candidates) == 1:
-        return outline_candidates[0]
+    if len(outline_matches) == 1:
+        return outline_matches[0]
+
+    if len(libraries) == 1:
+        return libraries[0]
 
     fail(
-        "Multiple .so files were found, but the OutlineRGB library "
-        "could not be identified automatically.\n\n"
+        "Multiple .so files were found, but the OutlineRGB "
+        "library could not be identified.\n\n"
         + "\n".join(
             f"  - {p.relative_to(ROOT)}"
-            for p in candidates
+            for p in libraries
         )
     )
 
 
-def load_manifest() -> dict:
-    if not MANIFEST_PATH.exists():
-        fail(f"manifest.json not found: {MANIFEST_PATH}")
+# ============================================================
+# Package staging
+# ============================================================
 
-    try:
-        with MANIFEST_PATH.open("r", encoding="utf-8") as f:
-            manifest = json.load(f)
-    except json.JSONDecodeError as exc:
-        fail(
-            f"manifest.json contains invalid JSON:\n"
-            f"{exc}"
-        )
+def prepare_staging_directory():
+    section("Preparing LeviPack")
 
-    if not isinstance(manifest, dict):
-        fail("manifest.json root must be a JSON object.")
+    staging = DIST_DIR / "_package"
 
-    return manifest
+    if staging.exists():
+        info("Removing old staging directory...")
+        shutil.rmtree(staging)
 
+    staging.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-def validate_manifest(manifest: dict) -> None:
-    """
-    Basic validation only.
+    info(f"Staging directory:")
+    info(f"  {staging}")
 
-    We intentionally do not rewrite the user's manifest here.
-    """
-
-    if "name" not in manifest:
-        print("Warning: manifest.json has no 'name' field.")
-
-    if "version" not in manifest:
-        print("Warning: manifest.json has no 'version' field.")
+    return staging
 
 
-def prepare_package_directory() -> Path:
-    """
-    Create a temporary directory containing exactly the files
-    that will be packed into the LeviPack.
-    """
-
-    package_root = DIST_DIR / "_package"
-
-    if package_root.exists():
-        shutil.rmtree(package_root)
-
-    package_root.mkdir(parents=True)
-
-    return package_root
-
-
-def copy_manifest(package_root: Path) -> None:
-    destination = package_root / "manifest.json"
+def copy_manifest(
+    manifest_path,
+    staging,
+):
+    destination = staging / "manifest.json"
 
     shutil.copy2(
-        MANIFEST_PATH,
-        destination
+        manifest_path,
+        destination,
+    )
+
+    info(
+        f"Added: manifest.json"
     )
 
 
 def copy_shared_library(
-    package_root: Path,
-    source_so: Path
-) -> Path:
+    source,
+    staging,
+):
+    destination_dir = (
+        staging
+        / PACKAGE_LIB_DIR
+    )
 
-    lib_dir = package_root / PACKAGE_LIB_DIR
-    lib_dir.mkdir(parents=True, exist_ok=True)
+    destination_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-    destination = lib_dir / PACKAGE_SO_NAME
+    destination = (
+        destination_dir
+        / PACKAGE_SO_NAME
+    )
 
     shutil.copy2(
-        source_so,
-        destination
+        source,
+        destination,
+    )
+
+    info(
+        "Added: "
+        f"{PACKAGE_LIB_DIR.as_posix()}/"
+        f"{PACKAGE_SO_NAME}"
     )
 
     return destination
 
 
-def create_levipack(package_root: Path) -> None:
-    if DIST_DIR.exists() is False:
-        DIST_DIR.mkdir(parents=True)
+# ============================================================
+# LeviPack creation
+# ============================================================
+
+def create_package(staging):
+    section("Creating LeviPack")
+
+    DIST_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
     if PACKAGE_PATH.exists():
-        print(f"Removing old package: {PACKAGE_PATH}")
-        PACKAGE_PATH.unlink()
+        info(
+            f"Removing old package: "
+            f"{PACKAGE_PATH}"
+        )
 
-    print()
-    print("Creating LeviPack:")
-    print(f"  {PACKAGE_PATH}")
+        PACKAGE_PATH.unlink()
 
     with ZipFile(
         PACKAGE_PATH,
@@ -200,145 +384,187 @@ def create_levipack(package_root: Path) -> None:
         compresslevel=9,
     ) as archive:
 
-        for file_path in sorted(package_root.rglob("*")):
-            if not file_path.is_file():
-                continue
+        files = sorted(
+            p for p in staging.rglob("*")
+            if p.is_file()
+        )
 
-            archive_name = file_path.relative_to(package_root).as_posix()
+        if not files:
+            fail(
+                "The package staging directory is empty."
+            )
 
-            print(f"  + {archive_name}")
+        for file_path in files:
+            relative_path = (
+                file_path
+                .relative_to(staging)
+                .as_posix()
+            )
+
+            info(
+                f"  + {relative_path}"
+            )
 
             archive.write(
                 file_path,
-                arcname=archive_name,
+                arcname=relative_path,
             )
 
+    info()
+    info(
+        f"Created: {PACKAGE_PATH}"
+    )
 
-def verify_package() -> None:
-    if not PACKAGE_PATH.exists():
+
+# ============================================================
+# Package verification
+# ============================================================
+
+def verify_package():
+    section("Verifying LeviPack")
+
+    if not PACKAGE_PATH.is_file():
         fail(
-            f"LeviPack was not created:\n"
+            "LeviPack was not created:\n"
             f"{PACKAGE_PATH}"
         )
 
-    print()
-    print("Verifying LeviPack...")
+    with ZipFile(
+        PACKAGE_PATH,
+        "r",
+    ) as archive:
 
-    with ZipFile(PACKAGE_PATH, "r") as archive:
+        bad_file = archive.testzip()
 
-        if archive.testzip() is not None:
-            fail("ZIP CRC verification failed.")
+        if bad_file is not None:
+            fail(
+                "ZIP integrity check failed at:\n"
+                f"{bad_file}"
+            )
 
         names = archive.namelist()
 
-        required_files = [
-            "manifest.json",
-            f"{PACKAGE_LIB_DIR.as_posix()}/{PACKAGE_SO_NAME}",
-        ]
+    info("Package contents:")
 
-        print()
-        print("Package contents:")
+    for name in names:
+        info(f"  {name}")
 
-        for name in names:
-            print(f"  {name}")
+    required = [
+        "manifest.json",
+        (
+            f"{PACKAGE_LIB_DIR.as_posix()}/"
+            f"{PACKAGE_SO_NAME}"
+        ),
+    ]
 
-        print()
+    info()
 
-        for required in required_files:
-            if required not in names:
-                fail(
-                    "Required file is missing from LeviPack:\n"
-                    f"  {required}"
-                )
+    for required_file in required:
+        if required_file not in names:
+            fail(
+                "Required file is missing from LeviPack:\n"
+                f"  {required_file}"
+            )
 
-    print("LeviPack verification: OK")
+    info("ZIP integrity: OK")
+    info("Required files: OK")
 
 
 # ============================================================
 # Main
 # ============================================================
 
-def main() -> None:
+def main():
+    section("OutlineRGB LeviPack Builder")
 
-    print("=" * 40)
-    print("OutlineRGB LeviPack Builder")
-    print("=" * 40)
-
-    print()
-    print(f"Project root : {ROOT}")
-    print(f"Build dir    : {BUILD_DIR}")
-    print(f"Manifest     : {MANIFEST_PATH}")
-    print(f"Output       : {PACKAGE_PATH}")
-
-    print()
-    print("=" * 40)
-    print("Checking manifest")
-    print("=" * 40)
-
-    manifest = load_manifest()
-    validate_manifest(manifest)
-
-    print("manifest.json: OK")
-
-    print()
-    print("=" * 40)
-    print("Finding Android ARM64 library")
-    print("=" * 40)
-
-    source_so = find_shared_library()
-
-    print()
-    print(f"Selected library:")
-    print(f"  {source_so.relative_to(ROOT)}")
-
-    print()
-    print("=" * 40)
-    print("Preparing package")
-    print("=" * 40)
-
-    package_root = prepare_package_directory()
-
-    copy_manifest(package_root)
-
-    packaged_so = copy_shared_library(
-        package_root,
-        source_so
+    info(
+        f"Project root : {ROOT}"
     )
 
-    print()
-    print("Package staging directory:")
-    print(f"  {package_root}")
+    info(
+        f"Build dir    : {BUILD_DIR}"
+    )
 
-    print()
-    print("Packaged native library:")
-    print(f"  {packaged_so.relative_to(package_root)}")
+    info(
+        f"Output       : {PACKAGE_PATH}"
+    )
 
-    print()
-    print("=" * 40)
-    print("Creating LeviPack")
-    print("=" * 40)
+    # --------------------------------------------------------
+    # Manifest
+    # --------------------------------------------------------
 
-    create_levipack(package_root)
+    manifest_path = find_manifest()
 
-    print()
-    print("=" * 40)
-    print("Verifying LeviPack")
-    print("=" * 40)
+    manifest = load_manifest(
+        manifest_path
+    )
+
+    validate_manifest(
+        manifest
+    )
+
+    # --------------------------------------------------------
+    # Native library
+    # --------------------------------------------------------
+
+    libraries = find_shared_libraries()
+
+    selected_library = select_shared_library(
+        libraries
+    )
+
+    info()
+    info("Selected native library:")
+    info(
+        f"  {selected_library.relative_to(ROOT)}"
+    )
+
+    # --------------------------------------------------------
+    # Staging
+    # --------------------------------------------------------
+
+    staging = prepare_staging_directory()
+
+    copy_manifest(
+        manifest_path,
+        staging,
+    )
+
+    copy_shared_library(
+        selected_library,
+        staging,
+    )
+
+    # --------------------------------------------------------
+    # Package
+    # --------------------------------------------------------
+
+    create_package(
+        staging
+    )
+
+    # --------------------------------------------------------
+    # Verify
+    # --------------------------------------------------------
 
     verify_package()
 
-    # Cleanup temporary staging directory.
-    if package_root.exists():
-        shutil.rmtree(package_root)
+    # --------------------------------------------------------
+    # Cleanup
+    # --------------------------------------------------------
 
-    print()
-    print("=" * 40)
-    print("BUILD SUCCESS")
-    print("=" * 40)
-    print()
-    print(f"LeviPack:")
-    print(f"  {PACKAGE_PATH}")
-    print()
+    if staging.exists():
+        shutil.rmtree(staging)
+
+    section("BUILD SUCCESS")
+
+    info(
+        f"LeviPack:"
+    )
+
+    info(
+        f"  {PACKAGE_PATH}"
+    )
 
 
 if __name__ == "__main__":
