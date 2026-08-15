@@ -10,8 +10,6 @@ on:
 
   pull_request:
 
-  workflow_dispatch:
-
 jobs:
   build:
     name: Build Android ARM64 LeviPack
@@ -19,47 +17,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ============================================================
-      # CHECKOUT
-      # ============================================================
-
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
-
-      # ============================================================
-      # SHOW REPOSITORY
-      # ============================================================
-
-      - name: Show repository structure
-        shell: bash
-        run: |
-          set -e
-
-          echo "========================================"
-          echo "Repository"
-          echo "========================================"
-
-          echo "Workspace:"
-          pwd
-
-          echo ""
-          echo "Root files:"
-          find . -maxdepth 2 -type f | sort
-
-          echo ""
-          echo "Manifest files:"
-          find . \
-            -type f \
-            -name "manifest.json" \
-            -not -path "./.git/*" \
-            -not -path "./build/*" \
-            -not -path "./dist/*" \
-            -print \
-            | sort
-
-      # ============================================================
-      # JAVA
-      # ============================================================
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -67,25 +26,81 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # ============================================================
-      # ANDROID
-      # ============================================================
-
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
-
-      # ============================================================
-      # XMAKE
-      # ============================================================
 
       - name: Install Xmake
         uses: xmake-io/github-action-setup-xmake@v1
         with:
           xmake-version: latest
 
-      # ============================================================
-      # CONFIGURE
-      # ============================================================
+      - name: Check project files
+        shell: bash
+        run: |
+          set -e
+
+          echo "========================================"
+          echo "Project files"
+          echo "========================================"
+
+          test -f xmake.lua
+          test -f assets/manifest.json
+          test -f scripts/package_levipack.py
+
+          echo "xmake.lua                 OK"
+          echo "assets/manifest.json      OK"
+          echo "package_levipack.py       OK"
+
+      - name: Validate packaging script
+        shell: bash
+        run: |
+          set -e
+
+          echo "========================================"
+          echo "Python syntax check"
+          echo "========================================"
+
+          python3 -m py_compile scripts/package_levipack.py
+
+          echo "Python syntax OK"
+
+      - name: Validate source manifest
+        shell: bash
+        run: |
+          set -e
+
+          echo "========================================"
+          echo "Source manifest"
+          echo "========================================"
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("assets/manifest.json")
+
+          data = json.loads(
+              path.read_text(encoding="utf-8")
+          )
+
+          print(json.dumps(
+              data,
+              indent=2,
+              ensure_ascii=False
+          ))
+
+          assert data["type"] == "preload-native"
+          assert data["entry"] == "libOutlineRGB.so"
+
+          versions = data.get("minecraft_versions", [])
+
+          assert "1.26.4*" in versions, (
+              "minecraft_versions must contain 1.26.4*"
+          )
+
+          print()
+          print("Source manifest compatibility OK")
+          PY
 
       - name: Configure Android ARM64
         shell: bash
@@ -95,11 +110,8 @@ jobs:
           xmake f \
             -p android \
             -a arm64-v8a \
-            -m release
-
-      # ============================================================
-      # BUILD
-      # ============================================================
+            -m release \
+            -y
 
       - name: Build
         shell: bash
@@ -108,53 +120,60 @@ jobs:
 
           xmake -y
 
-      # ============================================================
-      # SHOW SO
-      # ============================================================
-
-      - name: Locate native library
+      - name: Locate ARM64 library
         shell: bash
         run: |
           set -e
 
           echo "========================================"
-          echo "Android ARM64 libraries"
+          echo "Searching for ARM64 shared library"
           echo "========================================"
 
           find build \
             -type f \
             -name "*.so" \
-            -print \
-            | sort
+            -print
 
-          SO_PATH="$(find build \
+          LIBRARY="$(find build \
             -type f \
-            -iname "liboutlinergb.so" \
-            -print \
-            -quit)"
+            -name "liboutlinergb.so" \
+            -print -quit)"
 
-          if [ -z "$SO_PATH" ]; then
-            echo ""
-            echo "ERROR: OutlineRGB shared library was not found."
-            echo ""
-            echo "Available .so files:"
-            find build \
-              -type f \
-              -name "*.so" \
-              -print \
-              | sort
+          if [ -z "$LIBRARY" ]; then
+            echo
+            echo "ERROR: liboutlinergb.so was not found."
             exit 1
           fi
 
-          echo ""
-          echo "Selected library:"
-          echo "$SO_PATH"
+          echo
+          echo "Found:"
+          echo "$LIBRARY"
 
-          echo "SO_PATH=$SO_PATH" >> "$GITHUB_ENV"
+          mkdir -p dist
 
-      # ============================================================
-      # PACKAGE
-      # ============================================================
+          cp "$LIBRARY" dist/libOutlineRGB.so
+
+          echo
+          echo "Packaged build input:"
+          ls -lh dist/libOutlineRGB.so
+
+      - name: Verify ARM64 ELF
+        shell: bash
+        run: |
+          set -e
+
+          echo "========================================"
+          echo "Checking ELF architecture"
+          echo "========================================"
+
+          file dist/libOutlineRGB.so
+
+          readelf -h dist/libOutlineRGB.so | tee /tmp/readelf.txt
+
+          grep -q "AArch64" /tmp/readelf.txt
+
+          echo
+          echo "ARM64/AArch64 ELF OK"
 
       - name: Package LeviPack
         shell: bash
@@ -165,55 +184,77 @@ jobs:
           echo "Package LeviPack"
           echo "========================================"
 
-          python3 scripts/package_levipack.py
-
-      # ============================================================
-      # VERIFY
-      # ============================================================
+          python3 scripts/package_levipack.py \
+            --library dist/libOutlineRGB.so \
+            --manifest assets/manifest.json \
+            --output dist/OutlineRGB.levipack
 
       - name: Verify LeviPack
         shell: bash
         run: |
           set -e
 
-          PACKAGE="dist/OutlineRGB.levipack"
-
-          if [ ! -f "$PACKAGE" ]; then
-            echo "ERROR: $PACKAGE was not created."
-            exit 1
-          fi
-
           echo "========================================"
-          echo "LeviPack contents"
+          echo "Final LeviPack"
           echo "========================================"
 
-          unzip -l "$PACKAGE"
+          test -f dist/OutlineRGB.levipack
 
-          echo ""
+          echo
+          echo "ZIP entries:"
+          unzip -l dist/OutlineRGB.levipack
+
+          echo
+          echo "Manifest:"
+          unzip -p \
+            dist/OutlineRGB.levipack \
+            manifest.json
+
+          echo
           echo "========================================"
-          echo "Manifest"
+          echo "Strict structure check"
           echo "========================================"
 
-          unzip -p "$PACKAGE" manifest.json
+          python3 - <<'PY'
+          import json
+          import zipfile
+          from pathlib import Path
 
-          echo ""
-          echo "========================================"
-          echo "Checking native library"
-          echo "========================================"
+          package = Path("dist/OutlineRGB.levipack")
 
-          if ! unzip -l "$PACKAGE" | grep -q \
-            "lib/arm64-v8a/libOutlineRGB.so"; then
+          expected = {
+              "manifest.json",
+              "libOutlineRGB.so",
+          }
 
-            echo "ERROR: libOutlineRGB.so missing from package."
-            exit 1
-          fi
+          with zipfile.ZipFile(package, "r") as z:
+              names = set(z.namelist())
 
-          echo ""
-          echo "LeviPack verification: OK"
+              print("Actual:")
+              for name in sorted(names):
+                  print("  ", name)
 
-      # ============================================================
-      # ARTIFACT
-      # ============================================================
+              assert names == expected, (
+                  f"Invalid package structure: {sorted(names)}"
+              )
+
+              manifest = json.loads(
+                  z.read("manifest.json")
+              )
+
+              assert manifest["type"] == "preload-native"
+              assert manifest["entry"] == "libOutlineRGB.so"
+              assert "1.26.4*" in manifest["minecraft_versions"]
+
+              print()
+              print("Manifest compatibility:")
+              print(
+                  "  Minecraft 1.26.4* : OK"
+              )
+
+          print()
+          print("LeviPack structure: OK")
+          PY
 
       - name: Upload LeviPack
         uses: actions/upload-artifact@v4
