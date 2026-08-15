@@ -1,16 +1,21 @@
 #pragma once
 
-#include "types.hpp"
+#include <cstdint>
+#include <atomic>
 
-namespace OutlineRenderer {
+namespace outline {
 
-bool initialize();
+struct Config {
+    std::atomic<bool> enabled{true};
 
-void drawAABB(
-    void* screenContext,
-    const AABB& box,
-    const Color& color,
-    float thickness
-);
+    std::atomic<float> red{1.0f};
+    std::atomic<float> green{0.0f};
+    std::atomic<float> blue{0.0f};
+    std::atomic<float> alpha{1.0f};
+
+    std::atomic<float> lineWidth{2.0f};
+};
+
+Config& config();
 
 }
