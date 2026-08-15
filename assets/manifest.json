@@ -1,11 +1,13 @@
 {
   "type": "preload-native",
   "name": "OutlineRGB",
-  "author": "OutlineRGB Contributors",
-  "version": "0.1.0",
-  "entry": "liboutlinergb.so",
+  "author": "AthaxDev",
+  "version": "1.0.0",
+  "entry": "libOutlineRGB.so",
   "icon": "",
   "minecraft_versions": [
-    "26.44.*"
-  ]
+    "1.26.4*"
+  ],
+  "overwrite_files": [],
+  "overwrite_folders": []
 }
