@@ -1,10 +1,11 @@
 {
+  "type": "preload-native",
   "name": "OutlineRGB",
-  "id": "outlinergb",
-  "version": "0.1.0",
-  "description": "Standalone native RGB outline renderer for Minecraft Bedrock Android.",
   "author": "OutlineRGB Contributors",
-  "platform": "android",
-  "architecture": "arm64-v8a",
-  "entry": "liboutlinergb.so"
+  "version": "0.1.0",
+  "entry": "liboutlinergb.so",
+  "icon": "",
+  "minecraft_versions": [
+    "1.26.4*"
+  ]
 }
