@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(OutlineRGB LANGUAGES C CXX)
+project(OutlineRGB LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -8,6 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_library(
     outlinergb
     SHARED
+
     src/main.cpp
     src/hook.cpp
     src/renderer.cpp
@@ -23,13 +24,27 @@ target_include_directories(
 target_compile_options(
     outlinergb
     PRIVATE
+
     -Wall
     -Wextra
     -Wpedantic
+
+    -fvisibility=hidden
+)
+
+find_library(
+    log-lib
+    log
+)
+
+find_library(
+    dl-lib
+    dl
 )
 
 target_link_libraries(
     outlinergb
-    log
-    dl
+    PRIVATE
+    ${log-lib}
+    ${dl-lib}
 )
