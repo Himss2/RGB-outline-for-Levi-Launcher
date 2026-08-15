@@ -1,20 +1,20 @@
 #pragma once
 
-namespace OutlineConfig {
+#include <atomic>
 
-inline bool enabled = true;
+namespace outline {
 
-// MVP: merah solid terlebih dahulu.
-inline float red   = 1.0f;
-inline float green = 0.0f;
-inline float blue  = 0.0f;
-inline float alpha = 1.0f;
+struct Config {
+    std::atomic<bool> enabled{true};
 
-// Nanti dipakai setelah renderer terbukti.
-inline float thickness = 0.025f;
+    std::atomic<float> red{1.0f};
+    std::atomic<float> green{0.0f};
+    std::atomic<float> blue{0.0f};
+    std::atomic<float> alpha{1.0f};
 
-// RGB nanti.
-inline bool rgb = false;
-inline float rgbSpeed = 1.0f;
+    std::atomic<float> lineWidth{2.0f};
+};
+
+Config& config();
 
 }
