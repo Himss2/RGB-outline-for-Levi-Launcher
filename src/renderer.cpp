@@ -1,127 +1,120 @@
 #include "outline/renderer.hpp"
-#include "outline/config.hpp"
+#include "outline/resolver.hpp"
 
 #include <android/log.h>
 
 #define LOG_TAG "OutlineRGB"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+#define LOGI(...) \
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+
+#define LOGE(...) \
+    __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+namespace outline::renderer {
 
 namespace {
 
-using BeginFn =
-    void (*)(void*, int);
+TessellatorBeginFn gBegin{};
+TessellatorColorFn gColor{};
+TessellatorVertexFn gVertex{};
 
-using ColorFn =
-    void (*)(void*, float, float, float, float);
-
-using VertexFn =
-    void (*)(void*, float, float, float);
-
-using EndFn =
-    void (*)(void*);
-
-BeginFn gBegin = nullptr;
-ColorFn gColor = nullptr;
-VertexFn gVertex = nullptr;
-EndFn gEnd = nullptr;
+Tessellator* gTessellator{};
 
 }
-
-namespace OutlineRenderer {
 
 bool initialize() {
-    /*
-     * These function pointers will be connected to the
-     * already-resolved Bedrock rendering functions.
-     *
-     * We don't invent their addresses here.
-     */
+    gBegin =
+        reinterpret_cast<TessellatorBeginFn>(
+            resolver::tessellatorBegin()
+        );
 
-    LOGI("Renderer initialized");
+    gColor =
+        reinterpret_cast<TessellatorColorFn>(
+            resolver::tessellatorColor()
+        );
 
-    return true;
+    gVertex =
+        reinterpret_cast<TessellatorVertexFn>(
+            resolver::tessellatorVertex()
+        );
+
+    const bool ok =
+        gBegin &&
+        gColor &&
+        gVertex;
+
+    if (ok)
+        LOGI("Tessellator API ready");
+    else
+        LOGE("Tessellator API incomplete");
+
+    return ok;
 }
 
-void drawAABB(
-    void* screenContext,
-    const AABB& box,
-    const Color& color,
-    float thickness
+bool ready() {
+    return
+        gBegin &&
+        gColor &&
+        gVertex &&
+        gTessellator;
+}
+
+void setTessellator(
+    Tessellator* tessellator
 ) {
-    if (!screenContext)
+    gTessellator = tessellator;
+}
+
+void begin(
+    int mode
+) {
+    if (!gBegin || !gTessellator)
         return;
 
-    if (!gBegin || !gColor || !gVertex || !gEnd) {
-        LOGE("Renderer functions aren't resolved");
+    gBegin(
+        gTessellator,
+        mode
+    );
+}
+
+void color(
+    const Color& value
+) {
+    if (!gColor || !gTessellator)
         return;
-    }
-
-    /*
-     * MVP geometry.
-     *
-     * Once the exact Tessellator ABI is connected,
-     * these 12 edges become thin quads.
-     */
-
-    gBegin(screenContext, 1);
 
     gColor(
-        screenContext,
-        color.r,
-        color.g,
-        color.b,
-        color.a
+        gTessellator,
+        value.r,
+        value.g,
+        value.b,
+        value.a
     );
+}
 
-    const float x0 = box.min.x;
-    const float y0 = box.min.y;
-    const float z0 = box.min.z;
+void vertex(
+    const Vec3& position
+) {
+    if (!gVertex || !gTessellator)
+        return;
 
-    const float x1 = box.max.x;
-    const float y1 = box.max.y;
-    const float z1 = box.max.z;
+    gVertex(
+        gTessellator,
+        position.x,
+        position.y,
+        position.z
+    );
+}
 
-    // Bottom
-    gVertex(screenContext, x0, y0, z0);
-    gVertex(screenContext, x1, y0, z0);
-
-    gVertex(screenContext, x1, y0, z0);
-    gVertex(screenContext, x1, y0, z1);
-
-    gVertex(screenContext, x1, y0, z1);
-    gVertex(screenContext, x0, y0, z1);
-
-    gVertex(screenContext, x0, y0, z1);
-    gVertex(screenContext, x0, y0, z0);
-
-    // Top
-    gVertex(screenContext, x0, y1, z0);
-    gVertex(screenContext, x1, y1, z0);
-
-    gVertex(screenContext, x1, y1, z0);
-    gVertex(screenContext, x1, y1, z1);
-
-    gVertex(screenContext, x1, y1, z1);
-    gVertex(screenContext, x0, y1, z1);
-
-    gVertex(screenContext, x0, y1, z1);
-    gVertex(screenContext, x0, y1, z0);
-
-    // Vertical
-    gVertex(screenContext, x0, y0, z0);
-    gVertex(screenContext, x0, y1, z0);
-
-    gVertex(screenContext, x1, y0, z0);
-    gVertex(screenContext, x1, y1, z0);
-
-    gVertex(screenContext, x1, y0, z1);
-    gVertex(screenContext, x1, y1, z1);
-
-    gVertex(screenContext, x0, y0, z1);
-    gVertex(screenContext, x0, y1, z1);
-
-    gEnd(screenContext);
+void end() {
+    /*
+     * There is intentionally no guessed Tessellator::end()
+     * signature here.
+     *
+     * MeshHelpersRenderMeshImmediately is the vanilla
+     * submission path we resolved separately.
+     */
 }
 
 }
