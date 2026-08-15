@@ -1,21 +1,9 @@
 #pragma once
 
-#include <cstdint>
-#include <atomic>
+namespace outline::renderer {
 
-namespace outline {
+void initialize();
 
-struct Config {
-    std::atomic<bool> enabled{true};
-
-    std::atomic<float> red{1.0f};
-    std::atomic<float> green{0.0f};
-    std::atomic<float> blue{0.0f};
-    std::atomic<float> alpha{1.0f};
-
-    std::atomic<float> lineWidth{2.0f};
-};
-
-Config& config();
+void shutdown();
 
 }
