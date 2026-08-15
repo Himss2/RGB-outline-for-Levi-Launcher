@@ -1,24 +1,30 @@
-set_project("OutlineRGB")
-set_version("0.1.0")
+add_rules("mode.debug", "mode.release")
 
 set_languages("cxx20")
 
-add_rules("mode.debug", "mode.release")
-
-target("outlinergb")
+target("SelectionOutline")
     set_kind("shared")
-    set_basename("outlinergb")
+    set_arch("arm64-v8a")
 
     add_files("src/*.cpp")
-    add_includedirs("include")
 
-    add_cxxflags(
-        "-Wall",
-        "-Wextra",
-        "-Wpedantic",
-        {force = true}
+    add_includedirs("include", {public = true})
+
+    add_syslinks(
+        "log",
+        "dl",
+        "android"
     )
 
     if is_plat("android") then
-        add_syslinks("log", "dl")
+        add_defines("ANDROID")
     end
+
+    set_targetdir("build")
+
+    after_build(function (target)
+        print("========================================")
+        print(" SelectionOutline build complete")
+        print(" Output: " .. target:targetfile())
+        print("========================================")
+    end)
