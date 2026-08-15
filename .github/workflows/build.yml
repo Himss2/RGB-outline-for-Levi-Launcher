@@ -12,7 +12,6 @@ on:
 
   workflow_dispatch:
 
-
 jobs:
   build:
     name: Build Android ARM64 LeviPack
@@ -20,18 +19,43 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
-      # =========================================================
+      # ============================================================
       # CHECKOUT
-      # =========================================================
+      # ============================================================
 
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ============================================================
+      # DEBUG REPOSITORY
+      # ============================================================
 
-      # =========================================================
-      # ENVIRONMENT
-      # =========================================================
+      - name: Show repository structure
+        shell: bash
+        run: |
+          set -e
+
+          echo "========================================"
+          echo "Repository structure"
+          echo "========================================"
+
+          pwd
+
+          echo ""
+          echo "Top-level files:"
+          find . -maxdepth 2 -type f | sort
+
+          echo ""
+          echo "Manifest candidates:"
+          find . \
+            -type f \
+            \( -name "manifest.json" -o -name "*.json" \) \
+            -print \
+            | sort
+
+      # ============================================================
+      # SETUP JAVA
+      # ============================================================
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -39,197 +63,87 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # ============================================================
+      # SETUP ANDROID
+      # ============================================================
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      # ============================================================
+      # XMAKE
+      # ============================================================
 
       - name: Install Xmake
         uses: xmake-io/github-action-setup-xmake@v1
         with:
           xmake-version: latest
 
+      # ============================================================
+      # FIND MANIFEST
+      # ============================================================
 
-      # =========================================================
-      # SHOW REPOSITORY STRUCTURE
-      # =========================================================
-
-      - name: Show repository structure
-        run: |
-          echo "========================================"
-          echo "Repository"
-          echo "========================================"
-
-          pwd
-
-          echo ""
-          echo "=== Top level ==="
-          find . -maxdepth 2 -type f | sort
-
-          echo ""
-          echo "=== scripts ==="
-          if [ -d scripts ]; then
-            find scripts -maxdepth 2 -type f -print | sort
-          else
-            echo "scripts/ directory does not exist"
-          fi
-
-          echo ""
-          echo "=== assets ==="
-          if [ -d assets ]; then
-            find assets -maxdepth 3 -type f -print | sort
-          else
-            echo "assets/ directory does not exist"
-          fi
-
-
-      # =========================================================
-      # CHECK PACKAGING SCRIPT
-      # =========================================================
-
-      - name: Check LeviPack packaging script
+      - name: Locate manifest
+        shell: bash
         run: |
           set -e
 
           echo "========================================"
-          echo "Checking package_levipack.py"
+          echo "Locating manifest.json"
           echo "========================================"
 
-          if [ ! -f scripts/package_levipack.py ]; then
-            echo "ERROR:"
-            echo "scripts/package_levipack.py was not found."
+          MANIFEST="$(find . -type f -name 'manifest.json' -print -quit)"
+
+          if [ -z "$MANIFEST" ]; then
+            echo "ERROR: manifest.json was not found."
             echo ""
-            echo "Current scripts directory:"
-            find . -maxdepth 3 -type f -path "*/scripts/*" -print || true
+            echo "Available JSON files:"
+            find . -type f -name "*.json" -print | sort
             exit 1
           fi
 
-          echo "Found:"
-          ls -lh scripts/package_levipack.py
+          echo "Manifest found:"
+          echo "$MANIFEST"
 
-          echo ""
-          echo "Python syntax check:"
-          python3 -m py_compile scripts/package_levipack.py
+          echo "MANIFEST_PATH=$MANIFEST" >> "$GITHUB_ENV"
 
-          echo "Python syntax: OK"
-
-
-      # =========================================================
-      # CHECK MANIFEST
-      # =========================================================
-
-      - name: Check LeviPack manifest
-        run: |
-          set -e
-
-          echo "========================================"
-          echo "Checking manifest"
-          echo "========================================"
-
-          if [ -f assets/manifest.json ]; then
-            echo "Found assets/manifest.json"
-            cat assets/manifest.json
-          elif [ -f manifest.json ]; then
-            echo "Found manifest.json"
-            cat manifest.json
-          else
-            echo "WARNING:"
-            echo "No manifest.json was found."
-            echo ""
-            echo "The packaging script must provide the manifest"
-            echo "if the LeviPack format requires one."
-          fi
-
-
-      # =========================================================
-      # CONFIGURE XMAKE
-      # =========================================================
+      # ============================================================
+      # CONFIGURE
+      # ============================================================
 
       - name: Configure Android ARM64
+        shell: bash
         run: |
           set -e
-
-          echo "========================================"
-          echo "Configure Android ARM64"
-          echo "========================================"
 
           xmake f \
             -p android \
             -a arm64-v8a \
             -m release
 
-
-      # =========================================================
+      # ============================================================
       # BUILD
-      # =========================================================
+      # ============================================================
 
       - name: Build
+        shell: bash
         run: |
           set -e
-
-          echo "========================================"
-          echo "Build"
-          echo "========================================"
 
           xmake -y
 
+      # ============================================================
+      # FIND SO
+      # ============================================================
 
-      # =========================================================
-      # SHOW BUILD OUTPUT
-      # =========================================================
-
-      - name: Show build output
-        run: |
-          echo "========================================"
-          echo "Shared libraries"
-          echo "========================================"
-
-          if [ -d build ]; then
-            find build \
-              -type f \
-              -name "*.so" \
-              -print \
-              | sort
-          else
-            echo "ERROR: build/ directory does not exist."
-            exit 1
-          fi
-
-          echo ""
-          echo "========================================"
-          echo "Build tree"
-          echo "========================================"
-
-          find build \
-            -maxdepth 6 \
-            -type f \
-            -print \
-            | sort
-
-
-      # =========================================================
-      # CHECK NATIVE LIBRARY
-      # =========================================================
-
-      - name: Check ARM64 native library
+      - name: Locate shared library
+        shell: bash
         run: |
           set -e
 
           echo "========================================"
-          echo "Checking native library"
+          echo "Searching for ARM64 shared library"
           echo "========================================"
-
-          SO_COUNT=$(find build -type f -name "*.so" | wc -l)
-
-          echo "Found $SO_COUNT shared library/libraries."
-
-          if [ "$SO_COUNT" -eq 0 ]; then
-            echo "ERROR: No .so file was produced."
-            exit 1
-          fi
-
-          echo ""
-          echo "Libraries:"
 
           find build \
             -type f \
@@ -237,266 +151,81 @@ jobs:
             -print \
             | sort
 
-          echo ""
-          echo "File information:"
+          SO_PATH="$(find build \
+            -type f \
+            -name "libOutlineRGB.so" \
+            -print \
+            -quit)"
 
-          while IFS= read -r so; do
+          if [ -z "$SO_PATH" ]; then
             echo ""
-            echo "--- $so ---"
-            file "$so"
-            ls -lh "$so"
-          done < <(find build -type f -name "*.so" | sort)
+            echo "ERROR: libOutlineRGB.so was not found."
+            exit 1
+          fi
 
+          echo ""
+          echo "Found:"
+          echo "$SO_PATH"
 
-      # =========================================================
+          echo "SO_PATH=$SO_PATH" >> "$GITHUB_ENV"
+
+      # ============================================================
       # PACKAGE
-      # =========================================================
+      # ============================================================
 
       - name: Package LeviPack
+        shell: bash
         run: |
           set -e
 
           echo "========================================"
-          echo "Package LeviPack"
+          echo "Packaging OutlineRGB.levipack"
           echo "========================================"
-
-          mkdir -p dist
 
           python3 scripts/package_levipack.py
 
+      # ============================================================
+      # VERIFY
+      # ============================================================
 
-      # =========================================================
-      # SHOW PACKAGE OUTPUT
-      # =========================================================
-
-      - name: Show package output
+      - name: Verify LeviPack
+        shell: bash
         run: |
-          echo "========================================"
-          echo "Package output"
-          echo "========================================"
+          set -e
 
-          if [ ! -d dist ]; then
-            echo "ERROR: dist/ directory does not exist."
+          PACKAGE="dist/OutlineRGB.levipack"
+
+          if [ ! -f "$PACKAGE" ]; then
+            echo "ERROR: LeviPack was not generated."
             exit 1
           fi
 
-          find dist \
-            -maxdepth 3 \
-            -type f \
-            -print \
-            | sort
+          echo "========================================"
+          echo "LeviPack contents"
+          echo "========================================"
+
+          unzip -l "$PACKAGE"
 
           echo ""
-          echo "Directory listing:"
-          ls -lah dist/
-
-
-      # =========================================================
-      # VERIFY LEVIPACK EXISTS
-      # =========================================================
-
-      - name: Verify LeviPack exists
-        run: |
-          set -e
-
-          echo "========================================"
-          echo "Verify LeviPack"
-          echo "========================================"
-
-          PACK="dist/OutlineRGB.levipack"
-
-          if [ ! -f "$PACK" ]; then
-            echo "ERROR: LeviPack was not created."
-            echo ""
-            echo "Expected:"
-            echo "  $PACK"
-            echo ""
-            echo "Actual dist contents:"
-            find dist \
-              -maxdepth 3 \
-              -type f \
-              -print \
-              | sort || true
-
-            exit 1
-          fi
-
-          if [ ! -s "$PACK" ]; then
-            echo "ERROR: LeviPack exists but is empty."
-            exit 1
-          fi
-
-          echo "LeviPack found:"
-          ls -lh "$PACK"
-
-
-      # =========================================================
-      # VERIFY ZIP / LEVIPACK STRUCTURE
-      # =========================================================
-
-      - name: Verify LeviPack archive
-        run: |
-          set -e
-
-          PACK="dist/OutlineRGB.levipack"
-
-          echo "========================================"
-          echo "LeviPack archive"
-          echo "========================================"
-
-          echo ""
-          echo "=== Archive contents ==="
-
-          unzip -l "$PACK"
-
-          echo ""
-          echo "=== ZIP integrity ==="
-
-          unzip -t "$PACK"
-
-          echo ""
-          echo "Archive integrity: OK"
-
-
-      # =========================================================
-      # VERIFY NATIVE LIBRARY INSIDE PACKAGE
-      # =========================================================
-
-      - name: Verify native library in LeviPack
-        run: |
-          set -e
-
-          PACK="dist/OutlineRGB.levipack"
-
-          echo "========================================"
-          echo "Native library verification"
-          echo "========================================"
-
-          echo ""
-          echo "Searching for .so files inside package..."
-
-          SO_ENTRIES=$(unzip -Z1 "$PACK" | grep -E '\.so$' || true)
-
-          if [ -z "$SO_ENTRIES" ]; then
-            echo "ERROR: No .so file exists inside LeviPack."
-            exit 1
-          fi
-
-          echo "$SO_ENTRIES"
-
-          echo ""
-          echo "Native library: FOUND"
-
-
-      # =========================================================
-      # VERIFY ARM64 PATH
-      # =========================================================
-
-      - name: Verify ARM64 package path
-        run: |
-          set -e
-
-          PACK="dist/OutlineRGB.levipack"
-
-          echo "========================================"
-          echo "ARM64 package path"
-          echo "========================================"
-
-          ARM64_ENTRIES=$(
-            unzip -Z1 "$PACK" \
-              | grep -E 'arm64-v8a/.+\.so$' \
-              || true
-          )
-
-          if [ -z "$ARM64_ENTRIES" ]; then
-            echo "WARNING:"
-            echo "No .so file was found under lib/arm64-v8a/."
-            echo ""
-            echo "Current archive:"
-            unzip -Z1 "$PACK"
-            echo ""
-            echo "This may be correct only if the actual"
-            echo "LeviPack format uses a different layout."
-          else
-            echo "ARM64 native library:"
-            echo "$ARM64_ENTRIES"
-          fi
-
-
-      # =========================================================
-      # VERIFY MANIFEST
-      # =========================================================
-
-      - name: Verify manifest
-        run: |
-          set -e
-
-          PACK="dist/OutlineRGB.levipack"
-
           echo "========================================"
           echo "Manifest"
           echo "========================================"
 
-          if unzip -Z1 "$PACK" | grep -qx "manifest.json"; then
+          unzip -p "$PACKAGE" manifest.json
 
-            echo "manifest.json found."
-            echo ""
-            echo "=== manifest.json ==="
-
-            unzip -p "$PACK" manifest.json
-
-            echo ""
-            echo ""
-            echo "Validating JSON..."
-
-            unzip -p "$PACK" manifest.json \
-              | python3 -m json.tool \
-              > /dev/null
-
-            echo "Manifest JSON: OK"
-
-          else
-
-            echo "WARNING:"
-            echo "manifest.json is not present in the root of the LeviPack."
-
-            echo ""
-            echo "Current package contents:"
-            unzip -Z1 "$PACK"
-
-          fi
-
-
-      # =========================================================
-      # FINAL PACKAGE INFORMATION
-      # =========================================================
-
-      - name: Final package information
-        run: |
-          set -e
-
-          PACK="dist/OutlineRGB.levipack"
-
+          echo ""
           echo "========================================"
-          echo "FINAL PACKAGE"
+          echo "Shared library"
           echo "========================================"
 
-          echo ""
-          echo "File:"
-          ls -lh "$PACK"
+          unzip -p "$PACKAGE" manifest.json >/dev/null
 
-          echo ""
-          echo "SHA256:"
-          sha256sum "$PACK"
+          unzip -l "$PACKAGE" | grep \
+            "lib/arm64-v8a/libOutlineRGB.so"
 
-          echo ""
-          echo "Contents:"
-          unzip -Z1 "$PACK"
-
-
-      # =========================================================
-      # UPLOAD ARTIFACT
-      # =========================================================
+      # ============================================================
+      # ARTIFACT
+      # ============================================================
 
       - name: Upload LeviPack
         uses: actions/upload-artifact@v4
