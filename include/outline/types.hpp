@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+namespace outline {
+
 struct Vec3 {
     float x;
     float y;
@@ -19,3 +21,5 @@ struct Color {
     float b;
     float a;
 };
+
+}
