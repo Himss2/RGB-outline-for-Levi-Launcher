@@ -6,6 +6,6 @@
   "entry": "liboutlinergb.so",
   "icon": "",
   "minecraft_versions": [
-    "26.44"
+    "26.4*"
   ]
 }
