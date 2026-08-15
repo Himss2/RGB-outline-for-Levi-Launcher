@@ -1,127 +1,74 @@
-#include "outline/renderer.hpp"
-#include "outline/config.hpp"
+#include <outline/config.hpp>
+#include <outline/renderer.hpp>
+#include <outline/resolver.hpp>
+#include <outline/types.hpp>
 
-#include <android/log.h>
+#include <cstdint>
 
-#define LOG_TAG "OutlineRGB"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+namespace outline {
 
 namespace {
 
-using BeginFn =
-    void (*)(void*, int);
+constexpr std::uintptr_t TESSELLATOR_COLOR_OFFSET = 0x1A0;
 
-using ColorFn =
-    void (*)(void*, float, float, float, float);
+/*
+ * Layout minimum yang kita butuhkan dari hasil RE.
+ *
+ * Jangan memperlakukan ini sebagai full Minecraft class.
+ */
+struct TessellatorView {
+    std::byte padding[TESSELLATOR_COLOR_OFFSET];
 
-using VertexFn =
-    void (*)(void*, float, float, float);
+    std::uint32_t packedColor;
+};
 
-using EndFn =
-    void (*)(void*);
-
-BeginFn gBegin = nullptr;
-ColorFn gColor = nullptr;
-VertexFn gVertex = nullptr;
-EndFn gEnd = nullptr;
-
-}
-
-namespace OutlineRenderer {
-
-bool initialize() {
-    /*
-     * These function pointers will be connected to the
-     * already-resolved Bedrock rendering functions.
-     *
-     * We don't invent their addresses here.
-     */
-
-    LOGI("Renderer initialized");
-
-    return true;
-}
-
-void drawAABB(
-    void* screenContext,
-    const AABB& box,
-    const Color& color,
-    float thickness
+std::uint32_t packColor(
+    float r,
+    float g,
+    float b,
+    float a
 ) {
-    if (!screenContext)
-        return;
+    auto clamp = [](float v) {
+        if (v < 0.0f) return 0.0f;
+        if (v > 1.0f) return 1.0f;
+        return v;
+    };
 
-    if (!gBegin || !gColor || !gVertex || !gEnd) {
-        LOGE("Renderer functions aren't resolved");
-        return;
-    }
+    const auto R =
+        static_cast<std::uint32_t>(clamp(r) * 255.0f);
 
-    /*
-     * MVP geometry.
-     *
-     * Once the exact Tessellator ABI is connected,
-     * these 12 edges become thin quads.
-     */
+    const auto G =
+        static_cast<std::uint32_t>(clamp(g) * 255.0f);
 
-    gBegin(screenContext, 1);
+    const auto B =
+        static_cast<std::uint32_t>(clamp(b) * 255.0f);
 
-    gColor(
-        screenContext,
-        color.r,
-        color.g,
-        color.b,
-        color.a
+    const auto A =
+        static_cast<std::uint32_t>(clamp(a) * 255.0f);
+
+    return
+        (R << 24) |
+        (G << 16) |
+        (B << 8) |
+        A;
+}
+
+std::uint32_t currentColor() {
+    auto& cfg = config();
+
+    return packColor(
+        cfg.red.load(),
+        cfg.green.load(),
+        cfg.blue.load(),
+        cfg.alpha.load()
     );
+}
 
-    const float x0 = box.min.x;
-    const float y0 = box.min.y;
-    const float z0 = box.min.z;
+}
 
-    const float x1 = box.max.x;
-    const float y1 = box.max.y;
-    const float z1 = box.max.z;
-
-    // Bottom
-    gVertex(screenContext, x0, y0, z0);
-    gVertex(screenContext, x1, y0, z0);
-
-    gVertex(screenContext, x1, y0, z0);
-    gVertex(screenContext, x1, y0, z1);
-
-    gVertex(screenContext, x1, y0, z1);
-    gVertex(screenContext, x0, y0, z1);
-
-    gVertex(screenContext, x0, y0, z1);
-    gVertex(screenContext, x0, y0, z0);
-
-    // Top
-    gVertex(screenContext, x0, y1, z0);
-    gVertex(screenContext, x1, y1, z0);
-
-    gVertex(screenContext, x1, y1, z0);
-    gVertex(screenContext, x1, y1, z1);
-
-    gVertex(screenContext, x1, y1, z1);
-    gVertex(screenContext, x0, y1, z1);
-
-    gVertex(screenContext, x0, y1, z1);
-    gVertex(screenContext, x0, y1, z0);
-
-    // Vertical
-    gVertex(screenContext, x0, y0, z0);
-    gVertex(screenContext, x0, y1, z0);
-
-    gVertex(screenContext, x1, y0, z0);
-    gVertex(screenContext, x1, y1, z0);
-
-    gVertex(screenContext, x1, y0, z1);
-    gVertex(screenContext, x1, y1, z1);
-
-    gVertex(screenContext, x0, y0, z1);
-    gVertex(screenContext, x0, y1, z1);
-
-    gEnd(screenContext);
+Config& config() {
+    static Config instance;
+    return instance;
 }
 
 }
