@@ -1,81 +1,34 @@
 #include "outline/resolver.hpp"
 
 #include <android/log.h>
-#include <link.h>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
-#include <vector>
-#include <algorithm>
+#include <string>
 
 #define LOG_TAG "OutlineRGB"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+#define LOGI(...) \
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+
+#define LOGW(...) \
+    __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
 
 namespace {
 
-uintptr_t gBase = 0;
-uintptr_t gTextBegin = 0;
-uintptr_t gTextEnd = 0;
+OutlineResolver::MemoryRange gLibrary;
+OutlineResolver::MemoryRange gText;
 
 std::vector<OutlineResolver::Candidate> gCandidates;
 
-bool isReadable(uintptr_t p) {
-    return p != 0;
-}
-
-bool scanPattern(
-    uintptr_t begin,
-    uintptr_t end,
-    const uint8_t* pattern,
-    const char* mask,
-    size_t size,
-    std::vector<uintptr_t>& result
+bool containsLibraryName(
+    const char* line,
+    const char* libraryName
 ) {
-    if (!begin || !end || end <= begin || size == 0)
+    if (!line || !libraryName)
         return false;
 
-    for (uintptr_t p = begin; p + size <= end; ++p) {
-        bool match = true;
-
-        for (size_t i = 0; i < size; ++i) {
-            if (mask[i] == 'x' && *(uint8_t*)(p + i) != pattern[i]) {
-                match = false;
-                break;
-            }
-        }
-
-        if (match)
-            result.push_back(p);
-    }
-
-    return !result.empty();
-}
-
-int validateCandidate(uintptr_t address) {
-    if (!isReadable(address))
-        return 0;
-
-    int score = 0;
-
-    /*
-     * IMPORTANT:
-     * This is deliberately only a structural validator.
-     *
-     * We do NOT yet declare a candidate to be
-     * renderOutlineSelection solely from its prologue.
-     */
-
-    const uint32_t* code =
-        reinterpret_cast<const uint32_t*>(address);
-
-    // ARM64 function must contain valid-looking instructions.
-    if (code[0] != 0)
-        score += 1;
-
-    if (code[1] != 0)
-        score += 1;
-
-    return score;
+    return std::strstr(line, libraryName) != nullptr;
 }
 
 }
@@ -83,84 +36,245 @@ int validateCandidate(uintptr_t address) {
 namespace OutlineResolver {
 
 bool initialize() {
-    LOGI("Initializing resolver");
-
-    /*
-     * The actual libminecraftpe.so mapping resolver will be
-     * connected to the target loader/hook API used by the
-     * standalone mod.
-     *
-     * We intentionally don't hardcode 0xAE2CAE4.
-     */
+    gLibrary = {};
+    gText = {};
+    gCandidates.clear();
 
     LOGI("Resolver initialized");
 
     return true;
 }
 
-uintptr_t findOutlineCandidate() {
-    gCandidates.clear();
+bool findMinecraftLibrary(MemoryRange& library) {
+    std::ifstream maps("/proc/self/maps");
 
-    /*
-     * Candidate signatures from ThickBaddie are retained only
-     * as discovery signatures.
-     *
-     * They MUST NOT be interpreted as proof of function identity.
-     */
-
-    static const uint8_t pattern[] = {
-        0xFD, 0x7B, 0xBA, 0xA9,
-        0xFC, 0x6F, 0x01, 0xA9,
-        0xFA, 0x67, 0x02, 0xA9,
-        0xF8, 0x5F, 0x03, 0xA9,
-        0xF6, 0x57, 0x04, 0xA9
-    };
-
-    static const char mask[] =
-        "xxxxxxxxxxxxxxxxxxxx";
-
-    std::vector<uintptr_t> matches;
-
-    if (!scanPattern(
-        gTextBegin,
-        gTextEnd,
-        pattern,
-        mask,
-        sizeof(pattern),
-        matches
-    )) {
-        LOGE("No candidate found");
-        return 0;
+    if (!maps.is_open()) {
+        LOGW("Unable to open /proc/self/maps");
+        return false;
     }
+
+    std::string line;
+
+    uintptr_t lowest = 0;
+    uintptr_t highest = 0;
+
+    while (std::getline(maps, line)) {
+        if (!containsLibraryName(
+                line.c_str(),
+                "libminecraftpe.so")) {
+            continue;
+        }
+
+        uintptr_t start = 0;
+        uintptr_t end = 0;
+
+        if (std::sscanf(
+                line.c_str(),
+                "%lx-%lx",
+                &start,
+                &end
+            ) != 2) {
+            continue;
+        }
+
+        if (start == 0 || end <= start)
+            continue;
+
+        if (lowest == 0 || start < lowest)
+            lowest = start;
+
+        if (end > highest)
+            highest = end;
+    }
+
+    if (lowest == 0 || highest <= lowest) {
+        LOGW("libminecraftpe.so not found");
+
+        return false;
+    }
+
+    library.begin = lowest;
+    library.end = highest;
+
+    gLibrary = library;
 
     LOGI(
-        "Discovery signature produced %zu candidates",
-        matches.size()
+        "Minecraft library: %p - %p",
+        reinterpret_cast<void*>(library.begin),
+        reinterpret_cast<void*>(library.end)
     );
 
-    for (uintptr_t address : matches) {
-        Candidate c;
-        c.address = address;
-        c.score = validateCandidate(address);
-
-        gCandidates.push_back(c);
-
-        LOGI(
-            "candidate = %p score=%d",
-            reinterpret_cast<void*>(address),
-            c.score
-        );
-    }
-
-    /*
-     * NEVER automatically hook the first match.
-     *
-     * Until semantic validation is implemented, return 0.
-     */
-    return 0;
+    return true;
 }
 
-const std::vector<Candidate>& candidates() {
+bool findTextRange(
+    uintptr_t libraryBase,
+    MemoryRange& text
+) {
+    (void)libraryBase;
+
+    /*
+     * For the first probe we use executable mappings of
+     * libminecraftpe.so from /proc/self/maps.
+     *
+     * The final resolver will obtain the exact ELF .text
+     * section instead of treating every executable mapping
+     * as text.
+     */
+
+    std::ifstream maps("/proc/self/maps");
+
+    if (!maps.is_open())
+        return false;
+
+    std::string line;
+
+    uintptr_t bestStart = 0;
+    uintptr_t bestEnd = 0;
+
+    while (std::getline(maps, line)) {
+        if (!containsLibraryName(
+                line.c_str(),
+                "libminecraftpe.so")) {
+            continue;
+        }
+
+        /*
+         * Format:
+         *
+         * start-end perms offset ...
+         */
+
+        uintptr_t start = 0;
+        uintptr_t end = 0;
+        uintptr_t offset = 0;
+
+        char permissions[5] = {};
+
+        if (std::sscanf(
+                line.c_str(),
+                "%lx-%lx %4s %lx",
+                &start,
+                &end,
+                permissions,
+                &offset
+            ) != 4) {
+            continue;
+        }
+
+        /*
+         * Executable mapping.
+         */
+        if (permissions[2] != 'x')
+            continue;
+
+        if (end <= start)
+            continue;
+
+        if (bestStart == 0 || start < bestStart) {
+            bestStart = start;
+            bestEnd = end;
+        }
+    }
+
+    if (bestStart == 0 || bestEnd <= bestStart) {
+        LOGW("Executable libminecraftpe mapping not found");
+        return false;
+    }
+
+    text.begin = bestStart;
+    text.end = bestEnd;
+
+    gText = text;
+
+    LOGI(
+        "Minecraft executable range: %p - %p (%zu bytes)",
+        reinterpret_cast<void*>(text.begin),
+        reinterpret_cast<void*>(text.end),
+        text.size()
+    );
+
+    return true;
+}
+
+std::vector<uintptr_t> scan(
+    const MemoryRange& range,
+    const uint8_t* pattern,
+    const char* mask,
+    size_t patternSize
+) {
+    std::vector<uintptr_t> result;
+
+    if (!range.valid())
+        return result;
+
+    if (!pattern || !mask || patternSize == 0)
+        return result;
+
+    if (range.size() < patternSize)
+        return result;
+
+    for (
+        uintptr_t address = range.begin;
+        address + patternSize <= range.end;
+        ++address
+    ) {
+        bool match = true;
+
+        for (size_t i = 0; i < patternSize; ++i) {
+            if (mask[i] != 'x')
+                continue;
+
+            const auto value =
+                *reinterpret_cast<const uint8_t*>(
+                    address + i
+                );
+
+            if (value != pattern[i]) {
+                match = false;
+                break;
+            }
+        }
+
+        if (match)
+            result.push_back(address);
+    }
+
+    return result;
+}
+
+int scoreCandidate(uintptr_t address) {
+    if (address == 0)
+        return 0;
+
+    int score = 0;
+
+    /*
+     * ARM64 instructions are 4-byte aligned.
+     */
+    if ((address & 3) == 0)
+        score += 1;
+
+    /*
+     * We only perform very conservative structural checks
+     * here. This is NOT semantic identification.
+     */
+    const uint32_t i0 =
+        *reinterpret_cast<const uint32_t*>(address);
+
+    const uint32_t i1 =
+        *reinterpret_cast<const uint32_t*>(address + 4);
+
+    if (i0 != 0)
+        score++;
+
+    if (i1 != 0)
+        score++;
+
+    return score;
+}
+
+const std::vector<Candidate>& getCandidates() {
     return gCandidates;
 }
 
