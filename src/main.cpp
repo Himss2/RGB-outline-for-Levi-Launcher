@@ -1,42 +1,41 @@
-#include "outline/resolver.hpp"
-#include "outline/renderer.hpp"
+#include <outline/hook.hpp>
+#include <outline/resolver.hpp>
 
 #include <android/log.h>
 
-#define LOG_TAG "OutlineRGB"
+#define LOG_TAG "SelectionOutline"
+
 #define LOGI(...) \
     __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 
-extern "C"
-__attribute__((visibility("default")))
-void outline_rgb_init() {
+#define LOGE(...) \
+    __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-    LOGI("================================");
-    LOGI(" OutlineRGB standalone");
-    LOGI(" initialization");
-    LOGI("================================");
-
-    if (!OutlineResolver::initialize()) {
-        LOGI("Resolver initialization failed");
-        return;
-    }
-
-    if (!OutlineRenderer::initialize()) {
-        LOGI("Renderer initialization failed");
-        return;
-    }
-
-    LOGI("Subsystems initialized");
+__attribute__((constructor))
+static void onLoad() {
+    LOGI("SelectionOutline loading");
 
     /*
-     * Deliberately no hook yet.
-     *
-     * The next verified step is:
-     *
-     * renderOutlineSelection ABI
-     *        ↓
-     * callback
-     *        ↓
-     * diagnostic logging
+     * Minecraft native library.
      */
+    if (!outline::resolver::initialize("libminecraftpe.so")) {
+        LOGE("failed to resolve libminecraftpe.so");
+        return;
+    }
+
+    LOGI("Minecraft symbols resolved");
+
+    if (!outline::hook::install()) {
+        LOGE("failed to install selection hook");
+        return;
+    }
+
+    LOGI("SelectionOutline initialized");
+}
+
+__attribute__((destructor))
+static void onUnload() {
+    outline::hook::uninstall();
+
+    LOGI("SelectionOutline unloaded");
 }
