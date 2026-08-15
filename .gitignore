@@ -1,0 +1,49 @@
+# Build
+build/
+build-*/
+out/
+bin/
+lib/
+
+# Xmake
+.xmake/
+build/
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# Android
+*.apk
+*.aab
+*.aar
+*.so
+*.o
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Reverse engineering
+*.i64
+*.idb
+*.id0
+*.id1
+*.id2
+*.nam
+*.til
+
+# Temporary files
+*.tmp
+*.bak
