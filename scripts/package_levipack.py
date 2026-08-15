@@ -1,464 +1,323 @@
 #!/usr/bin/env python3
 
-from pathlib import Path
+import argparse
 import json
-import shutil
 import sys
 import zipfile
+from pathlib import Path
 
 
-# ============================================================
-# PROJECT
-# ============================================================
+PACKAGE_LIBRARY_NAME = "libOutlineRGB.so"
+PACKAGE_MANIFEST_NAME = "manifest.json"
 
-ROOT = Path(__file__).resolve().parent.parent
-
-BUILD_DIR = ROOT / "build"
-DIST_DIR = ROOT / "dist"
-
-OUTPUT = DIST_DIR / "OutlineRGB.levipack"
+SUPPORTED_VERSION_PREFIX = "1.26.4"
 
 
-# ============================================================
-# CONSTANTS
-# ============================================================
-
-PACKAGE_SO_PATH = "lib/arm64-v8a/libOutlineRGB.so"
-
-
-# ============================================================
-# HELPERS
-# ============================================================
-
-def header(title):
-    print()
-    print("=" * 40)
-    print(title)
-    print("=" * 40)
-
-
-def fail(message):
+def fail(message: str) -> None:
     print()
     print("ERROR:")
     print(message)
     print()
-    sys.exit(1)
+    raise SystemExit(1)
 
 
-# ============================================================
-# MANIFEST
-# ============================================================
-
-def find_manifest():
-
-    root_manifest = ROOT / "manifest.json"
-
-    if root_manifest.is_file():
-        return root_manifest
-
-    manifests = sorted(
-        p
-        for p in ROOT.rglob("manifest.json")
-        if p.is_file()
-        and ".git" not in p.parts
-        and "build" not in p.parts
-        and "dist" not in p.parts
-    )
-
-    if not manifests:
-        fail(
-            "manifest.json was not found.\n\n"
-            f"Repository root:\n{ROOT}"
-        )
-
-    if len(manifests) > 1:
-
-        print("Multiple manifest.json files found:")
-
-        for manifest in manifests:
-            print(
-                f"  {manifest.relative_to(ROOT)}"
-            )
-
-        print()
-
-    return manifests[0]
-
-
-def validate_manifest(path):
+def load_manifest(path: Path) -> dict:
+    if not path.is_file():
+        fail(f"Manifest not found: {path}")
 
     try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        fail(f"Invalid JSON in manifest: {exc}")
 
-        with path.open(
-            "r",
-            encoding="utf-8"
-        ) as file:
+    if not isinstance(data, dict):
+        fail("manifest.json must contain a JSON object.")
 
-            manifest = json.load(file)
+    return data
 
-    except json.JSONDecodeError as error:
 
+def validate_manifest(manifest: dict) -> None:
+    required = [
+        "type",
+        "name",
+        "author",
+        "version",
+        "entry",
+    ]
+
+    missing = [key for key in required if key not in manifest]
+
+    if missing:
         fail(
-            "manifest.json contains invalid JSON:\n"
-            f"{error}"
+            "Manifest is missing required fields: "
+            + ", ".join(missing)
         )
 
-    except OSError as error:
-
+    if manifest["type"] != "preload-native":
         fail(
-            "Unable to read manifest.json:\n"
-            f"{error}"
+            'manifest "type" must be "preload-native".'
         )
 
-    if not isinstance(manifest, dict):
-
+    if manifest["entry"] != PACKAGE_LIBRARY_NAME:
         fail(
-            "manifest.json root must be a JSON object."
+            'manifest "entry" must be '
+            f'"{PACKAGE_LIBRARY_NAME}".'
         )
 
-    print(
-        f"Manifest: {path.relative_to(ROOT)}"
-    )
+    versions = manifest.get("minecraft_versions", [])
 
-    if "name" in manifest:
-        print(
-            f"Name   : {manifest['name']}"
-        )
+    if not isinstance(versions, list):
+        fail('"minecraft_versions" must be an array.')
 
-    if "version" in manifest:
-        print(
-            f"Version: {manifest['version']}"
-        )
-
-    return manifest
-
-
-# ============================================================
-# NATIVE LIBRARY
-# ============================================================
-
-def find_native_library():
-
-    if not BUILD_DIR.exists():
-
+    if SUPPORTED_VERSION_PREFIX + "*" not in versions:
         fail(
-            "Build directory does not exist:\n"
-            f"{BUILD_DIR}"
+            'manifest must contain '
+            f'"minecraft_versions": ["{SUPPORTED_VERSION_PREFIX}*", ...]'
         )
 
-    # Case-insensitive search.
-    libraries = sorted(
-        p
-        for p in BUILD_DIR.rglob("*.so")
-        if p.is_file()
-        and p.name.lower() == "liboutlinergb.so"
-    )
 
-    if libraries:
-        return libraries[0]
+def normalize_manifest(manifest: dict) -> dict:
+    """
+    Normalize the manifest for the Android LeviLaunchroid
+    native-mod package.
 
-    # Fallback for unusual target naming.
-    libraries = sorted(
-        p
-        for p in BUILD_DIR.rglob("*.so")
-        if p.is_file()
-        and "outlinergb" in p.name.lower()
-    )
+    We deliberately keep user metadata such as name, author,
+    and version, but force the runtime-critical fields.
+    """
 
-    if libraries:
-        return libraries[0]
+    result = dict(manifest)
 
-    # Print everything useful before failing.
-    all_libraries = sorted(
-        p
-        for p in BUILD_DIR.rglob("*.so")
-        if p.is_file()
-    )
+    result["type"] = "preload-native"
+    result["entry"] = PACKAGE_LIBRARY_NAME
 
-    if all_libraries:
+    # Keep the package compatible with Minecraft 1.26.4x,
+    # including versions such as 1.26.44.3.
+    result["minecraft_versions"] = [
+        SUPPORTED_VERSION_PREFIX + "*"
+    ]
 
-        available = "\n".join(
-            f"  {p.relative_to(ROOT)}"
-            for p in all_libraries
+    # OutlineRGB does not overwrite any external files/folders.
+    result["overwrite_files"] = []
+    result["overwrite_folders"] = []
+
+    # The working reference mods use an empty icon field.
+    result["icon"] = ""
+
+    return result
+
+
+def find_library(path: Path) -> Path:
+    if path.is_file():
+        return path
+
+    fail(f"Shared library not found: {path}")
+
+
+def build_package(
+    library: Path,
+    manifest_path: Path,
+    output: Path,
+) -> None:
+
+    print("=" * 40)
+    print("OutlineRGB LeviPack Builder")
+    print("=" * 40)
+    print()
+    print(f"Library : {library}")
+    print(f"Manifest: {manifest_path}")
+    print(f"Output  : {output}")
+    print()
+
+    library = find_library(library)
+
+    print("=" * 40)
+    print("Checking manifest")
+    print("=" * 40)
+
+    manifest = load_manifest(manifest_path)
+    manifest = normalize_manifest(manifest)
+
+    validate_manifest(manifest)
+
+    print("Manifest OK")
+    print()
+    print(json.dumps(manifest, indent=2, ensure_ascii=False))
+    print()
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    if output.exists():
+        output.unlink()
+
+    manifest_bytes = (
+        json.dumps(
+            manifest,
+            indent=2,
+            ensure_ascii=False,
         )
+        + "\n"
+    ).encode("utf-8")
 
-        fail(
-            "OutlineRGB library was not found.\n\n"
-            "Available .so files:\n"
-            f"{available}"
-        )
-
-    fail(
-        "No .so files were found under build/."
-    )
-
-
-# ============================================================
-# DIST
-# ============================================================
-
-def prepare_dist():
-
-    DIST_DIR.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-    if OUTPUT.exists():
-
-        print(
-            f"Removing old package:\n"
-            f"  {OUTPUT}"
-        )
-
-        OUTPUT.unlink()
-
-
-# ============================================================
-# CREATE PACKAGE
-# ============================================================
-
-def create_package(
-    manifest_path,
-    library_path
-):
-
-    header(
-        "Creating LeviPack"
-    )
-
-    prepare_dist()
+    print("=" * 40)
+    print("Creating LeviPack")
+    print("=" * 40)
 
     with zipfile.ZipFile(
-        OUTPUT,
-        mode="w",
-        compression=zipfile.ZIP_DEFLATED
+        output,
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=9,
     ) as archive:
 
-        # ----------------------------------------------------
-        # MANIFEST
-        # ----------------------------------------------------
+        # Keep manifest and library directly in package root.
+        archive.writestr(
+            PACKAGE_MANIFEST_NAME,
+            manifest_bytes,
+        )
 
         archive.write(
-            manifest_path,
-            arcname="manifest.json"
+            library,
+            PACKAGE_LIBRARY_NAME,
         )
-
-        print(
-            "Added:"
-        )
-
-        print(
-            "  manifest.json"
-        )
-
-        # ----------------------------------------------------
-        # LIBRARY
-        # ----------------------------------------------------
-
-        archive.write(
-            library_path,
-            arcname=PACKAGE_SO_PATH
-        )
-
-        print(
-            "Added:"
-        )
-
-        print(
-            f"  {PACKAGE_SO_PATH}"
-        )
-
-
-# ============================================================
-# VERIFY
-# ============================================================
-
-def verify_package():
-
-    header(
-        "Verifying LeviPack"
-    )
-
-    if not OUTPUT.is_file():
-
-        fail(
-            "LeviPack was not created:\n"
-            f"{OUTPUT}"
-        )
-
-    with zipfile.ZipFile(
-        OUTPUT,
-        mode="r"
-    ) as archive:
-
-        # ZIP integrity.
-        bad_file = archive.testzip()
-
-        if bad_file is not None:
-
-            fail(
-                "ZIP integrity check failed:\n"
-                f"{bad_file}"
-            )
-
-        names = set(
-            archive.namelist()
-        )
-
-        required = {
-            "manifest.json",
-            PACKAGE_SO_PATH,
-        }
-
-        missing = required - names
-
-        if missing:
-
-            fail(
-                "Required package files are missing:\n"
-                + "\n".join(
-                    f"  {item}"
-                    for item in sorted(missing)
-                )
-            )
-
-        # ----------------------------------------------------
-        # Manifest validation inside package.
-        # ----------------------------------------------------
-
-        try:
-
-            manifest_data = archive.read(
-                "manifest.json"
-            )
-
-            json.loads(
-                manifest_data.decode("utf-8")
-            )
-
-        except Exception as error:
-
-            fail(
-                "Packaged manifest.json is invalid:\n"
-                f"{error}"
-            )
-
-        # ----------------------------------------------------
-        # Output
-        # ----------------------------------------------------
-
-        print(
-            "Package contents:"
-        )
-
-        for name in sorted(names):
-
-            print(
-                f"  {name}"
-            )
 
     print()
-    print(
-        "ZIP integrity : OK"
-    )
+    print(f"Created: {output}")
+    print()
 
-    print(
-        "Manifest      : OK"
-    )
-
-    print(
-        "ARM64 library : OK"
+    verify_package(
+        output=output,
+        library=library,
+        manifest=manifest,
     )
 
 
-# ============================================================
-# MAIN
-# ============================================================
+def verify_package(
+    output: Path,
+    library: Path,
+    manifest: dict,
+) -> None:
 
-def main():
+    print("=" * 40)
+    print("Verifying LeviPack")
+    print("=" * 40)
 
-    header(
-        "OutlineRGB LeviPack Builder"
+    if not output.is_file():
+        fail(f"LeviPack was not created: {output}")
+
+    with zipfile.ZipFile(output, "r") as archive:
+
+        names = archive.namelist()
+
+        expected = [
+            PACKAGE_LIBRARY_NAME,
+            PACKAGE_MANIFEST_NAME,
+        ]
+
+        if names != expected:
+            fail(
+                "Unexpected LeviPack structure.\n"
+                f"Expected: {expected}\n"
+                f"Actual  : {names}"
+            )
+
+        parsed_manifest = json.loads(
+            archive.read(PACKAGE_MANIFEST_NAME)
+            .decode("utf-8")
+        )
+
+        if parsed_manifest != manifest:
+            fail(
+                "Embedded manifest.json does not match "
+                "the normalized manifest."
+            )
+
+        library_info = archive.getinfo(
+            PACKAGE_LIBRARY_NAME
+        )
+
+        if library_info.file_size != library.stat().st_size:
+            fail(
+                "Embedded libOutlineRGB.so size does not "
+                "match the built library."
+            )
+
+        if parsed_manifest.get("type") != "preload-native":
+            fail(
+                'Embedded manifest has invalid "type".'
+            )
+
+        if parsed_manifest.get("entry") != PACKAGE_LIBRARY_NAME:
+            fail(
+                'Embedded manifest has invalid "entry".'
+            )
+
+        versions = parsed_manifest.get(
+            "minecraft_versions",
+            [],
+        )
+
+        if SUPPORTED_VERSION_PREFIX + "*" not in versions:
+            fail(
+                "Embedded manifest does not declare "
+                f"Minecraft {SUPPORTED_VERSION_PREFIX}* compatibility."
+            )
+
+    print("ZIP structure OK")
+    print("Manifest OK")
+    print("Library size OK")
+    print("Minecraft compatibility OK")
+    print()
+    print("LeviPack verification PASSED")
+    print()
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Build OutlineRGB Android LeviPack."
     )
 
-    print(
-        f"Project root : {ROOT}"
+    parser.add_argument(
+        "--library",
+        required=True,
+        type=Path,
+        help="Path to the built ARM64 shared library.",
     )
 
-    print(
-        f"Build dir    : {BUILD_DIR}"
+    parser.add_argument(
+        "--manifest",
+        required=True,
+        type=Path,
+        help="Path to source manifest.json.",
     )
 
-    print(
-        f"Output       : {OUTPUT}"
+    parser.add_argument(
+        "--output",
+        required=True,
+        type=Path,
+        help="Output .levipack path.",
     )
 
-    # --------------------------------------------------------
-    # Manifest
-    # --------------------------------------------------------
+    args = parser.parse_args()
 
-    header(
-        "Checking manifest"
-    )
+    try:
+        build_package(
+            library=args.library.resolve(),
+            manifest_path=args.manifest.resolve(),
+            output=args.output.resolve(),
+        )
 
-    manifest_path = find_manifest()
+    except SystemExit:
+        raise
 
-    validate_manifest(
-        manifest_path
-    )
+    except Exception as exc:
+        print(
+            f"Unexpected packaging error: {exc}",
+            file=sys.stderr,
+        )
+        return 1
 
-    # --------------------------------------------------------
-    # Native library
-    # --------------------------------------------------------
-
-    header(
-        "Checking native library"
-    )
-
-    library_path = find_native_library()
-
-    print(
-        "Selected library:"
-    )
-
-    print(
-        f"  {library_path.relative_to(ROOT)}"
-    )
-
-    # --------------------------------------------------------
-    # Package
-    # --------------------------------------------------------
-
-    create_package(
-        manifest_path,
-        library_path
-    )
-
-    # --------------------------------------------------------
-    # Verify
-    # --------------------------------------------------------
-
-    verify_package()
-
-    # --------------------------------------------------------
-    # Final
-    # --------------------------------------------------------
-
-    size = OUTPUT.stat().st_size
-
-    header(
-        "SUCCESS"
-    )
-
-    print(
-        f"LeviPack : {OUTPUT}"
-    )
-
-    print(
-        f"Size     : {size:,} bytes"
-    )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
