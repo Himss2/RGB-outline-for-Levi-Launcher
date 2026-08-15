@@ -1,96 +1,41 @@
-#include "outline/resolver.hpp"
-#include "outline/hook.hpp"
+#include <outline/hook.hpp>
+#include <outline/resolver.hpp>
 
 #include <android/log.h>
 
-#define LOG_TAG "OutlineRGB"
+#define LOG_TAG "SelectionOutline"
 
 #define LOGI(...) \
     __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 
-extern "C"
-__attribute__((visibility("default")))
-void outline_rgb_init() {
+#define LOGE(...) \
+    __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-    LOGI("--------------------------------");
-    LOGI("OutlineRGB ABI Probe");
-    LOGI("--------------------------------");
-
-    if (!OutlineResolver::initialize()) {
-        LOGI("Resolver initialization failed");
-        return;
-    }
-
-    if (!OutlineHook::initialize()) {
-        LOGI("Hook subsystem initialization failed");
-        return;
-    }
-
-    OutlineResolver::MemoryRange library;
-
-    if (!OutlineResolver::findMinecraftLibrary(library)) {
-        LOGI("Minecraft library unavailable");
-        return;
-    }
-
-    OutlineResolver::MemoryRange text;
-
-    if (!OutlineResolver::findTextRange(
-            library.begin,
-            text)) {
-        LOGI("Minecraft executable range unavailable");
-        return;
-    }
+__attribute__((constructor))
+static void onLoad() {
+    LOGI("SelectionOutline loading");
 
     /*
-     * ThickBaddie discovery signature.
-     *
-     * IMPORTANT:
-     *
-     * This is only a discovery signature.
-     * It is NOT treated as renderOutlineSelection.
+     * Minecraft native library.
      */
-
-    static const uint8_t thickBaddiePattern[] = {
-        0xFD, 0x7B, 0xBA, 0xA9,
-        0xFC, 0x6F, 0x01, 0xA9,
-        0xFA, 0x67, 0x02, 0xA9,
-        0xF8, 0x5F, 0x03, 0xA9,
-        0xF6, 0x57, 0x04, 0xA9
-    };
-
-    static const char thickBaddieMask[] =
-        "xxxxxxxxxxxxxxxxxxxx";
-
-    const auto matches =
-        OutlineResolver::scan(
-            text,
-            thickBaddiePattern,
-            thickBaddieMask,
-            sizeof(thickBaddiePattern)
-        );
-
-    LOGI(
-        "Discovery signature matches: %zu",
-        matches.size()
-    );
-
-    for (size_t i = 0; i < matches.size(); ++i) {
-
-        const auto address = matches[i];
-
-        const int score =
-            OutlineResolver::scoreCandidate(address);
-
-        LOGI(
-            "candidate[%zu] = %p score=%d",
-            i,
-            reinterpret_cast<void*>(address),
-            score
-        );
+    if (!outline::resolver::initialize("libminecraftpe.so")) {
+        LOGE("failed to resolve libminecraftpe.so");
+        return;
     }
 
-    LOGI("--------------------------------");
-    LOGI("ABI probe initialization done");
-    LOGI("--------------------------------");
+    LOGI("Minecraft symbols resolved");
+
+    if (!outline::hook::install()) {
+        LOGE("failed to install selection hook");
+        return;
+    }
+
+    LOGI("SelectionOutline initialized");
+}
+
+__attribute__((destructor))
+static void onUnload() {
+    outline::hook::uninstall();
+
+    LOGI("SelectionOutline unloaded");
 }
