@@ -2,30 +2,32 @@
 
 #include "types.hpp"
 
+#include <cstdint>
+
 namespace outline::renderer {
-
-using Tessellator = void;
-using ScreenContext = void;
-
-using TessellatorBeginFn =
-    void (*)(Tessellator*, void*, int, int, int);
-
-using TessellatorColorFn =
-    void (*)(Tessellator*, float, float, float, float);
-
-using TessellatorVertexFn =
-    void (*)(Tessellator*, float, float, float);
-
-using RenderMeshImmediatelyFn =
-    void (*)(ScreenContext*, Tessellator*, void*, char*);
 
 bool initialize();
 
-bool ready();
+void shutdown();
 
-void renderSelection(
-    void* levelRenderer,
-    void* screenContext
+bool initialized();
+
+/*
+ * Called only after the Minecraft rendering target
+ * has been successfully resolved.
+ */
+void renderSelectionBox(
+    const SelectionBox& box,
+    const Color& color
 );
 
-}
+/*
+ * Utility used by the implementation to generate
+ * the twelve edges of an AABB.
+ */
+void buildBoxEdges(
+    const AABB& box,
+    Vec3 (&edges)[24]
+);
+
+} // namespace outline::renderer
