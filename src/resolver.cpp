@@ -30,10 +30,14 @@ std::uintptr_t gRenderLevel{};
 std::uintptr_t gClientInstanceUpdate{};
 std::uintptr_t gClientInstanceGetLocalPlayer{};
 std::uintptr_t gLevelGetHitResult{};
+
 std::uintptr_t gTessellatorBegin{};
 std::uintptr_t gTessellatorColor{};
 std::uintptr_t gTessellatorVertex{};
+
 std::uintptr_t gMeshRenderImmediately{};
+std::uintptr_t gMeshRenderImmediately2{};
+
 std::uintptr_t gBlockGetOutline{};
 
 std::vector<Candidate> gBlockCandidates;
@@ -57,13 +61,6 @@ Pattern parsePattern(std::string_view text) {
         if (i >= text.size())
             break;
 
-        if (i + 1 >= text.size())
-            break;
-
-        // Accept both common wildcard spellings:
-        //   ??
-        //   ?
-        // The current signature table uses the second form.
         if (text[i] == '?') {
             result.push_back({
                 0,
@@ -72,12 +69,14 @@ Pattern parsePattern(std::string_view text) {
 
             ++i;
 
-            // Optional second '?' in the compact `??` form.
             if (i < text.size() && text[i] == '?')
                 ++i;
 
             continue;
         }
+
+        if (i + 1 >= text.size())
+            break;
 
         auto hex = [](char c) -> int {
             if (c >= '0' && c <= '9')
@@ -99,7 +98,9 @@ Pattern parsePattern(std::string_view text) {
             break;
 
         result.push_back({
-            static_cast<std::uint8_t>((hi << 4) | lo),
+            static_cast<std::uint8_t>(
+                (hi << 4) | lo
+            ),
             false
         });
 
@@ -117,7 +118,9 @@ bool matchPattern(
         return false;
 
     const auto* bytes =
-        reinterpret_cast<const std::uint8_t*>(address);
+        reinterpret_cast<const std::uint8_t*>(
+            address
+        );
 
     for (std::size_t i = 0; i < pattern.size(); ++i) {
         if (!pattern[i].wildcard &&
@@ -146,10 +149,11 @@ std::vector<std::uintptr_t> scan(
     const std::uintptr_t last =
         end - pattern.size();
 
-    for (std::uintptr_t address = begin;
-         address <= last;
-         address += 4) {
-
+    for (
+        std::uintptr_t address = begin;
+        address <= last;
+        address += 4
+    ) {
         if (matchPattern(address, pattern))
             result.push_back(address);
     }
@@ -164,15 +168,12 @@ int scoreFunction(
         return 0;
 
     const auto* code =
-        reinterpret_cast<const std::uint32_t*>(address);
+        reinterpret_cast<const std::uint32_t*>(
+            address
+        );
 
     int score = 0;
 
-    /*
-     * AArch64 instructions are 4-byte aligned.
-     *
-     * We deliberately keep this validator conservative.
-     */
     if ((address & 3u) == 0)
         score += 2;
 
@@ -197,21 +198,29 @@ int phdrCallback(
         return 0;
 
     const char* slash =
-        std::strrchr(info->dlpi_name, '/');
+        std::strrchr(
+            info->dlpi_name,
+            '/'
+        );
 
     const char* filename =
-        slash ? slash + 1 : info->dlpi_name;
+        slash
+            ? slash + 1
+            : info->dlpi_name;
 
     if (*wanted != filename)
         return 0;
 
     gModule.base =
-        static_cast<std::uintptr_t>(info->dlpi_addr);
+        static_cast<std::uintptr_t>(
+            info->dlpi_addr
+        );
 
-    for (std::size_t i = 0;
-         i < info->dlpi_phnum;
-         ++i) {
-
+    for (
+        std::size_t i = 0;
+        i < info->dlpi_phnum;
+        ++i
+    ) {
         const auto& phdr =
             info->dlpi_phdr[i];
 
@@ -223,11 +232,15 @@ int phdrCallback(
 
         const auto begin =
             gModule.base +
-            static_cast<std::uintptr_t>(phdr.p_vaddr);
+            static_cast<std::uintptr_t>(
+                phdr.p_vaddr
+            );
 
         const auto end =
             begin +
-            static_cast<std::uintptr_t>(phdr.p_memsz);
+            static_cast<std::uintptr_t>(
+                phdr.p_memsz
+            );
 
         if (!gModule.textBegin ||
             begin < gModule.textBegin) {
@@ -256,108 +269,162 @@ bool findModule(
     return gModule.valid();
 }
 
-/*
- * These signatures are directly derived from the
- * 26.44 BedrockTools signature table supplied for
- * this project.
- *
- * They are discovery signatures, not RVAs.
- */
 const Pattern& patternRenderLevel() {
-    static const Pattern pattern = parsePattern(
-        "EE 0F 16 FC ED 33 01 6D EB 2B 02 6D "
-        "E9 23 03 6D FD 7B 04 A9 FC 6F 05 A9 "
-        "FA 67 06 A9 F8 5F 07 A9 F6 57 08 A9 "
-        "F4 4F 09 A9 FD 03 01 91 FF 03 06 D1 "
-        "57 D0 3B D5 F8 03 00 AA F4 03 02 AA "
-        "E8 16 40 F9"
-    );
+    static const Pattern pattern =
+        parsePattern(
+            "EE 0F 16 FC ED 33 01 6D "
+            "EB 2B 02 6D E9 23 03 6D "
+            "FD 7B 04 A9 FC 6F 05 A9 "
+            "FA 67 06 A9 F8 5F 07 A9 "
+            "F6 57 08 A9 F4 4F 09 A9 "
+            "FD 03 01 91 FF 03 06 D1 "
+            "57 D0 3B D5 F8 03 00 AA "
+            "F4 03 02 AA E8 16 40 F9"
+        );
+
     return pattern;
 }
 
 const Pattern& patternClientInstanceUpdate() {
-    static const Pattern pattern = parsePattern(
-        "FD 7B BA A9 FC 6F 01 A9 FA 67 02 A9 F8 "
-        "5F 03 A9 F6 57 04 A9 F4 4F 05 A9 FD 03 "
-        "00 91 FF C3 12 D1 59 D0 3B D5 F3 03 00 "
-        "AA F4 03 01 2A 28 17 40 F9 A8 83 1F F8 "
-        "08 00 40 F9 09 35 46 F9 E8 E3 01 91"
-    );
+    static const Pattern pattern =
+        parsePattern(
+            "FD 7B BA A9 FC 6F 01 A9 "
+            "FA 67 02 A9 F8 5F 03 A9 "
+            "F6 57 04 A9 F4 4F 05 A9 "
+            "FD 03 00 91 FF C3 12 D1 "
+            "59 D0 3B D5 F3 03 00 AA "
+            "F4 03 01 2A 28 17 40 F9 "
+            "A8 83 1F F8 08 00 40 F9 "
+            "09 35 46 F9 E8 E3 01 91"
+        );
+
     return pattern;
 }
 
 const Pattern& patternClientInstanceGetLocalPlayer() {
-    static const Pattern pattern = parsePattern(
-        "FF 43 01 D1 FD 7B 03 A9 F3 23 00 F9 FD "
-        "C3 00 91 53 D0 3B D5 E8 03 00 AA E0 23 "
-        "00 91 69 16 40 F9 01 61 08 91 A9 83 1F "
-        "F8 ? ? ? ? E0 23 00 91 ? ? ? ? ? ? ? ? "
-        "E0 23 00 91 21 00 80 52 ? ? ? ? ? ? ? ? "
-        "E0 03 1F AA 68 16 40 F9 A9 83 5F F8 1F "
-        "01 09 EB ? ? ? ? FD 7B 43 A9"
-    );
+    static const Pattern pattern =
+        parsePattern(
+            "FF 43 01 D1 FD 7B 03 A9 "
+            "F3 23 00 F9 FD C3 00 91 "
+            "53 D0 3B D5 E8 03 00 AA "
+            "E0 23 00 91 69 16 40 F9 "
+            "01 61 08 91 A9 83 1F F8 "
+            "? ? ? ? E0 23 00 91 "
+            "? ? ? ? ? ? ? ? "
+            "E0 23 00 91 21 00 80 52 "
+            "? ? ? ? ? ? ? ? "
+            "E0 03 1F AA 68 16 40 F9 "
+            "A9 83 5F F8 1F 01 09 EB "
+            "? ? ? ? FD 7B 43 A9"
+        );
+
     return pattern;
 }
 
 const Pattern& patternLevelGetHitResult() {
-    static const Pattern pattern = parsePattern(
-        "00 E8 40 F9 C0 03 5F D6 00 E8 40 F9 "
-        "? ? ? ? FD 7B BD A9 F6 57 01 A9 F4 4F "
-        "02 A9 FD 03 00 91 09 E4 40 F9 1F 05 00 "
-        "F9 ? ? ? ? 35 D9 40 A9 F3 03 00 AA F4 "
-        "03 08 AA ? ? ? ? C1 22 00 91"
-    );
+    static const Pattern pattern =
+        parsePattern(
+            "00 E8 40 F9 C0 03 5F D6 "
+            "00 E8 40 F9 ? ? ? ? "
+            "FD 7B BD A9 F6 57 01 A9 "
+            "F4 4F 02 A9 FD 03 00 91 "
+            "09 E4 40 F9 1F 05 00 F9 "
+            "? ? ? ? 35 D9 40 A9 "
+            "F3 03 00 AA F4 03 08 AA "
+            "? ? ? ? C1 22 00 91"
+        );
+
     return pattern;
 }
 
 const Pattern& patternTessellatorBegin() {
-    static const Pattern pattern = parsePattern(
-        "FD 7B BC A9 F8 5F 01 A9 F6 57 02 A9 F4 "
-        "4F 03 A9 FD 03 00 91 08 20 4A 39 09 14 "
-        "49 39 08 01 09 2A ? ? ? ? F3 03 00 AA "
-        "1F 80 02 B9 F6 03 04 2A 1F 14 09 39 F4 "
-        "03 03 2A F5 03 02 2A 1F 20 0A 39"
-    );
+    static const Pattern pattern =
+        parsePattern(
+            "FD 7B BC A9 F8 5F 01 A9 "
+            "F6 57 02 A9 F4 4F 03 A9 "
+            "FD 03 00 91 08 20 4A 39 "
+            "09 14 49 39 08 01 09 2A "
+            "? ? ? ? F3 03 00 AA "
+            "1F 80 02 B9 F6 03 04 2A "
+            "1F 14 09 39 F4 03 03 2A "
+            "F5 03 02 2A 1F 20 0A 39"
+        );
+
     return pattern;
 }
 
 const Pattern& patternTessellatorColor() {
-    static const Pattern pattern = parsePattern(
-        "E8 6F A8 52 0C 10 49 39 04 01 27 1E 00 "
-        "08 24 1E 21 08 24 1E 42 08 24 1E 63 08 "
-        "24 1E 08 00 38 1E 29 00 38 1E 4A 00 38 "
-        "1E 6B 00 38 1E ? ? ? ? 6B 7D AB 0A EC "
-        "1F 80 52 4A 7D AA 0A 29 7D A9 0A"
-    );
+    static const Pattern pattern =
+        parsePattern(
+            "E8 6F A8 52 0C 10 49 39 "
+            "04 01 27 1E 00 08 24 1E "
+            "21 08 24 1E 42 08 24 1E "
+            "63 08 24 1E 08 00 38 1E "
+            "29 00 38 1E 4A 00 38 1E "
+            "6B 00 38 1E ? ? ? ? "
+            "6B 7D AB 0A EC 1F 80 52 "
+            "4A 7D AA 0A 29 7D A9 0A"
+        );
+
     return pattern;
 }
 
 const Pattern& patternTessellatorVertex() {
-    static const Pattern pattern = parsePattern(
-        "FF 43 02 D1 EA 13 00 FD E9 A3 02 6D FD FB "
-        "03 A9 FB 27 00 F9 FA 67 05 A9 F8 5F 06 "
-        "A9 F6 57 07 A9 F4 4F 08 A9 FD E3 00 91 "
-        "58 D0 3B D5 08 17 40 F9 E8 0F 00 F9 08 "
-        "80 42 B9 09 84 42 B9 1F 01 09 6B"
-    );
+    static const Pattern pattern =
+        parsePattern(
+            "FF 43 02 D1 EA 13 00 FD "
+            "E9 A3 02 6D FD FB 03 A9 "
+            "FB 27 00 F9 FA 67 05 A9 "
+            "F8 5F 06 A9 F6 57 07 A9 "
+            "F4 4F 08 A9 FD E3 00 91 "
+            "58 D0 3B D5 08 17 40 F9 "
+            "E8 0F 00 F9 08 80 42 B9 "
+            "09 84 42 B9 1F 01 09 6B"
+        );
+
     return pattern;
 }
 
 const Pattern& patternMeshRenderImmediately() {
-    static const Pattern pattern = parsePattern(
-        "FD 7B BB A9 FC 0B 00 F9 F8 5F 02 A9 F6 "
-        "57 03 A9 F4 4F 04 A9 FD 03 00 91 FF C3 "
-        "09 D1 58 D0 3B D5 F7 03 00 AA E0 03 01 "
-        "AA 08 17 40 F9 F4 03 04 AA F5 03 03 AA "
-        "F6 03 02 AA F3 03 01 AA A8 83 1F F8"
-    );
+    static const Pattern pattern =
+        parsePattern(
+            "FD 7B BB A9 FC 0B 00 F9 "
+            "F8 5F 02 A9 F6 57 03 A9 "
+            "F4 4F 04 A9 FD 03 00 91 "
+            "FF C3 09 D1 58 D0 3B D5 "
+            "F7 03 00 AA E0 03 01 AA "
+            "08 17 40 F9 F4 03 04 AA "
+            "F5 03 03 AA F6 03 02 AA "
+            "F3 03 01 AA A8 83 1F F8"
+        );
+
+    return pattern;
+}
+
+const Pattern& patternMeshRenderImmediately2() {
+    static const Pattern pattern =
+        parsePattern(
+            "FD 7B BC A9 FC 5F 01 A9 "
+            "F6 57 02 A9 F4 4F 03 A9 "
+            "FD 03 00 91 FF C3 09 D1 "
+            "57 D0 3B D5 F6 03 00 AA "
+            "E0 03 01 AA E8 16 40 F9 "
+            "F4 03 03 AA F5 03 02 AA "
+            "F3 03 01 AA A8 83 1F F8 "
+            "? ? ? ? ? ? ? ?"
+        );
+
     return pattern;
 }
 
 const Pattern& patternBlockGetOutlineDiscovery() {
-    static const Pattern pattern = parsePattern(
-        "? ? ? D1 ? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? 91"
-    );
+    static const Pattern pattern =
+        parsePattern(
+            "? ? ? D1 ? ? ? A9 "
+            "? ? ? A9 ? ? ? A9 "
+            "? ? ? 91"
+        );
+
     return pattern;
 }
 
@@ -384,19 +451,22 @@ std::uintptr_t resolveUnique(
 
     if (matches.size() > 1) {
         LOGI(
-            "%s: %zu matches",
+            "%s: %zu matches; using first",
             name,
             matches.size()
         );
     }
 
+    const auto address =
+        matches.front();
+
     LOGI(
-        "%s: selected %p",
+        "%s = %p",
         name,
-        reinterpret_cast<void*>(matches.front())
+        reinterpret_cast<void*>(address)
     );
 
-    return matches.front();
+    return address;
 }
 
 }
@@ -467,17 +537,18 @@ bool initialize(
             "TessellatorVertex"
         );
 
+    gMeshRenderImmediately2 =
+        resolveUnique(
+            patternMeshRenderImmediately2(),
+            "MeshHelpersRenderMeshImmediately2"
+        );
+
     gMeshRenderImmediately =
         resolveUnique(
             patternMeshRenderImmediately(),
             "MeshHelpersRenderMeshImmediately"
         );
 
-    /*
-     * Discovery only.
-     *
-     * Never automatically install this address.
-     */
     gBlockCandidates.clear();
 
     const auto blockMatches =
@@ -508,10 +579,10 @@ bool initialize(
     );
 
     /*
-     * IMPORTANT:
+     * Do NOT use an unverified candidate as Block::getOutline.
      *
-     * We deliberately don't assign gBlockGetOutline
-     * from an unverified candidate.
+     * The selection renderer currently uses the selected block
+     * position and the vanilla full-cube selection geometry.
      */
     gBlockGetOutline = 0;
 
@@ -528,7 +599,10 @@ bool ready() {
         gTessellatorBegin != 0 &&
         gTessellatorColor != 0 &&
         gTessellatorVertex != 0 &&
-        gMeshRenderImmediately != 0;
+        (
+            gMeshRenderImmediately2 != 0 ||
+            gMeshRenderImmediately != 0
+        );
 }
 
 std::uintptr_t libraryBase() {
@@ -565,6 +639,10 @@ std::uintptr_t tessellatorVertex() {
 
 std::uintptr_t meshRenderImmediately() {
     return gMeshRenderImmediately;
+}
+
+std::uintptr_t meshRenderImmediately2() {
+    return gMeshRenderImmediately2;
 }
 
 std::uintptr_t blockGetOutline() {
