@@ -27,6 +27,9 @@ namespace {
 ModuleRange gModule{};
 
 std::uintptr_t gRenderLevel{};
+std::uintptr_t gClientInstanceUpdate{};
+std::uintptr_t gClientInstanceGetLocalPlayer{};
+std::uintptr_t gLevelGetHitResult{};
 std::uintptr_t gTessellatorBegin{};
 std::uintptr_t gTessellatorColor{};
 std::uintptr_t gTessellatorVertex{};
@@ -57,13 +60,22 @@ Pattern parsePattern(std::string_view text) {
         if (i + 1 >= text.size())
             break;
 
-        if (text[i] == '?' && text[i + 1] == '?') {
+        // Accept both common wildcard spellings:
+        //   ??
+        //   ?
+        // The current signature table uses the second form.
+        if (text[i] == '?') {
             result.push_back({
                 0,
                 true
             });
 
-            i += 2;
+            ++i;
+
+            // Optional second '?' in the compact `??` form.
+            if (i < text.size() && text[i] == '?')
+                ++i;
+
             continue;
         }
 
@@ -252,113 +264,100 @@ bool findModule(
  * They are discovery signatures, not RVAs.
  */
 const Pattern& patternRenderLevel() {
-    static const Pattern pattern =
-        parsePattern(
-            "? ? ? FC "
-            "? ? ? 6D "
-            "? ? ? 6D "
-            "? ? ? 6D "
-            "? ? ? A9 "
-            "? ? ? A9 "
-            "? ? ? A9 "
-            "? ? ? A9 "
-            "? ? ? A9 "
-            "? ? ? A9 "
-            "? ? ? 91 "
-            "? ? ? D1 "
-            "57 D0 3B D5"
-        );
+    static const Pattern pattern = parsePattern(
+        "EE 0F 16 FC ED 33 01 6D EB 2B 02 6D "
+        "E9 23 03 6D FD 7B 04 A9 FC 6F 05 A9 "
+        "FA 67 06 A9 F8 5F 07 A9 F6 57 08 A9 "
+        "F4 4F 09 A9 FD 03 01 91 FF 03 06 D1 "
+        "57 D0 3B D5 F8 03 00 AA F4 03 02 AA "
+        "E8 16 40 F9"
+    );
+    return pattern;
+}
 
+const Pattern& patternClientInstanceUpdate() {
+    static const Pattern pattern = parsePattern(
+        "FD 7B BA A9 FC 6F 01 A9 FA 67 02 A9 F8 "
+        "5F 03 A9 F6 57 04 A9 F4 4F 05 A9 FD 03 "
+        "00 91 FF C3 12 D1 59 D0 3B D5 F3 03 00 "
+        "AA F4 03 01 2A 28 17 40 F9 A8 83 1F F8 "
+        "08 00 40 F9 09 35 46 F9 E8 E3 01 91"
+    );
+    return pattern;
+}
+
+const Pattern& patternClientInstanceGetLocalPlayer() {
+    static const Pattern pattern = parsePattern(
+        "FF 43 01 D1 FD 7B 03 A9 F3 23 00 F9 FD "
+        "C3 00 91 53 D0 3B D5 E8 03 00 AA E0 23 "
+        "00 91 69 16 40 F9 01 61 08 91 A9 83 1F "
+        "F8 ? ? ? ? E0 23 00 91 ? ? ? ? ? ? ? ? "
+        "E0 23 00 91 21 00 80 52 ? ? ? ? ? ? ? ? "
+        "E0 03 1F AA 68 16 40 F9 A9 83 5F F8 1F "
+        "01 09 EB ? ? ? ? FD 7B 43 A9"
+    );
+    return pattern;
+}
+
+const Pattern& patternLevelGetHitResult() {
+    static const Pattern pattern = parsePattern(
+        "00 E8 40 F9 C0 03 5F D6 00 E8 40 F9 "
+        "? ? ? ? FD 7B BD A9 F6 57 01 A9 F4 4F "
+        "02 A9 FD 03 00 91 09 E4 40 F9 1F 05 00 "
+        "F9 ? ? ? ? 35 D9 40 A9 F3 03 00 AA F4 "
+        "03 08 AA ? ? ? ? C1 22 00 91"
+    );
     return pattern;
 }
 
 const Pattern& patternTessellatorBegin() {
-    static const Pattern pattern =
-        parsePattern(
-            "? ? ? A9 "
-            "? ? ? A9 "
-            "? ? ? A9 "
-            "? ? ? A9 "
-            "FD 03 00 91 "
-            "? ? ? 39 "
-            "? ? ? 39 "
-            "08 01 09 2A"
-        );
-
+    static const Pattern pattern = parsePattern(
+        "FD 7B BC A9 F8 5F 01 A9 F6 57 02 A9 F4 "
+        "4F 03 A9 FD 03 00 91 08 20 4A 39 09 14 "
+        "49 39 08 01 09 2A ? ? ? ? F3 03 00 AA "
+        "1F 80 02 B9 F6 03 04 2A 1F 14 09 39 F4 "
+        "03 03 2A F5 03 02 2A 1F 20 0A 39"
+    );
     return pattern;
 }
 
 const Pattern& patternTessellatorColor() {
-    static const Pattern pattern =
-        parsePattern(
-            "? ? ? 52 "
-            "? ? ? 39 "
-            "04 01 27 1E"
-        );
-
+    static const Pattern pattern = parsePattern(
+        "E8 6F A8 52 0C 10 49 39 04 01 27 1E 00 "
+        "08 24 1E 21 08 24 1E 42 08 24 1E 63 08 "
+        "24 1E 08 00 38 1E 29 00 38 1E 4A 00 38 "
+        "1E 6B 00 38 1E ? ? ? ? 6B 7D AB 0A EC "
+        "1F 80 52 4A 7D AA 0A 29 7D A9 0A"
+    );
     return pattern;
 }
 
 const Pattern& patternTessellatorVertex() {
-    static const Pattern pattern =
-        parsePattern(
-            "? ? ? D1 "
-            "? ? ? FD "
-            "? ? ? 6D "
-            "? ? ? A9 "
-            "? ? ? F9 "
-            "? ? ? A9 "
-            "? ? ? A9 "
-            "? ? ? A9 "
-            "? ? ? A9 "
-            "? ? ? 91 "
-            "58 D0 3B D5 "
-            "? ? ? F9"
-        );
-
+    static const Pattern pattern = parsePattern(
+        "FF 43 02 D1 EA 13 00 FD E9 A3 02 6D FD FB "
+        "03 A9 FB 27 00 F9 FA 67 05 A9 F8 5F 06 "
+        "A9 F6 57 07 A9 F4 4F 08 A9 FD E3 00 91 "
+        "58 D0 3B D5 08 17 40 F9 E8 0F 00 F9 08 "
+        "80 42 B9 09 84 42 B9 1F 01 09 6B"
+    );
     return pattern;
 }
 
 const Pattern& patternMeshRenderImmediately() {
-    static const Pattern pattern =
-        parsePattern(
-            "? ? ? A9 "
-            "? ? ? F9 "
-            "? ? ? A9 "
-            "? ? ? A9 "
-            "? ? ? A9 "
-            "FD 03 00 91 "
-            "? ? ? D1 "
-            "58 D0 3B D5 "
-            "F7 03 00 AA "
-            "E0 03 01 AA "
-            "? ? ? F9 "
-            "F4 03 04 AA"
-        );
-
+    static const Pattern pattern = parsePattern(
+        "FD 7B BB A9 FC 0B 00 F9 F8 5F 02 A9 F6 "
+        "57 03 A9 F4 4F 04 A9 FD 03 00 91 FF C3 "
+        "09 D1 58 D0 3B D5 F7 03 00 AA E0 03 01 "
+        "AA 08 17 40 F9 F4 03 04 AA F5 03 03 AA "
+        "F6 03 02 AA F3 03 01 AA A8 83 1F F8"
+    );
     return pattern;
 }
 
-/*
- * block_getOutline is intentionally NOT assigned an RVA.
- *
- * The current repo does not contain a verified 26.44
- * signature for this function.
- *
- * Therefore the resolver leaves this address zero
- * instead of risking a crash by hooking an unrelated
- * function.
- */
 const Pattern& patternBlockGetOutlineDiscovery() {
-    static const Pattern pattern =
-        parsePattern(
-            "? ? ? D1 "
-            "? ? ? A9 "
-            "? ? ? A9 "
-            "? ? ? A9 "
-            "? ? ? 91"
-        );
-
+    static const Pattern pattern = parsePattern(
+        "? ? ? D1 ? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? 91"
+    );
     return pattern;
 }
 
@@ -375,8 +374,9 @@ std::uintptr_t resolveUnique(
 
     if (matches.empty()) {
         LOGE(
-            "%s: no matches",
-            name
+            "%s: no matches (pattern bytes=%zu)",
+            name,
+            pattern.size()
         );
 
         return 0;
@@ -389,6 +389,12 @@ std::uintptr_t resolveUnique(
             matches.size()
         );
     }
+
+    LOGI(
+        "%s: selected %p",
+        name,
+        reinterpret_cast<void*>(matches.front())
+    );
 
     return matches.front();
 }
@@ -423,6 +429,24 @@ bool initialize(
         resolveUnique(
             patternRenderLevel(),
             "RenderLevel"
+        );
+
+    gClientInstanceUpdate =
+        resolveUnique(
+            patternClientInstanceUpdate(),
+            "ClientInstanceUpdate"
+        );
+
+    gClientInstanceGetLocalPlayer =
+        resolveUnique(
+            patternClientInstanceGetLocalPlayer(),
+            "ClientInstanceGetLocalPlayer"
+        );
+
+    gLevelGetHitResult =
+        resolveUnique(
+            patternLevelGetHitResult(),
+            "LevelGetHitResult"
         );
 
     gTessellatorBegin =
@@ -498,6 +522,9 @@ bool ready() {
     return
         gModule.valid() &&
         gRenderLevel != 0 &&
+        gClientInstanceUpdate != 0 &&
+        gClientInstanceGetLocalPlayer != 0 &&
+        gLevelGetHitResult != 0 &&
         gTessellatorBegin != 0 &&
         gTessellatorColor != 0 &&
         gTessellatorVertex != 0 &&
@@ -510,6 +537,18 @@ std::uintptr_t libraryBase() {
 
 std::uintptr_t renderLevel() {
     return gRenderLevel;
+}
+
+std::uintptr_t clientInstanceUpdate() {
+    return gClientInstanceUpdate;
+}
+
+std::uintptr_t clientInstanceGetLocalPlayer() {
+    return gClientInstanceGetLocalPlayer;
+}
+
+std::uintptr_t levelGetHitResult() {
+    return gLevelGetHitResult;
 }
 
 std::uintptr_t tessellatorBegin() {
