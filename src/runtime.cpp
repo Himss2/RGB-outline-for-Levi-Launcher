@@ -5,15 +5,24 @@
 namespace outline::runtime {
 
 namespace {
-std::atomic<void*> gClientInstance{nullptr};
+
+std::atomic<void*> gClientInstance{
+    nullptr
+};
+
 }
 
 void setClientInstance(void* value) {
-    gClientInstance.store(value, std::memory_order_release);
+    gClientInstance.store(
+        value,
+        std::memory_order_release
+    );
 }
 
 void* clientInstance() {
-    return gClientInstance.load(std::memory_order_acquire);
+    return gClientInstance.load(
+        std::memory_order_acquire
+    );
 }
 
 }
