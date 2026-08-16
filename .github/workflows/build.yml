@@ -10,6 +10,8 @@ on:
 
   pull_request:
 
+  workflow_dispatch:
+
 jobs:
   build:
     name: Build Android ARM64 LeviPack
@@ -34,44 +36,48 @@ jobs:
         with:
           xmake-version: latest
 
-      - name: Check project files
+      - name: Check repository
         shell: bash
         run: |
           set -e
 
           echo "========================================"
-          echo "Project files"
+          echo "OutlineRGB repository"
           echo "========================================"
 
           test -f xmake.lua
           test -f assets/manifest.json
           test -f scripts/package_levipack.py
 
-          echo "xmake.lua                 OK"
-          echo "assets/manifest.json      OK"
-          echo "package_levipack.py       OK"
+          test -f src/main.cpp
+          test -f src/hook.cpp
+          test -f src/resolver.cpp
+          test -f src/renderer.cpp
+          test -f src/runtime.cpp
 
-      - name: Validate packaging script
+          test -f include/outline/types.hpp
+          test -f include/outline/config.hpp
+          test -f include/outline/hook.hpp
+          test -f include/outline/resolver.hpp
+          test -f include/outline/renderer.hpp
+          test -f include/outline/runtime.hpp
+
+          echo "Repository structure OK"
+
+      - name: Check Python package script
         shell: bash
         run: |
           set -e
 
-          echo "========================================"
-          echo "Python syntax check"
-          echo "========================================"
-
-          python3 -m py_compile scripts/package_levipack.py
+          python3 -m py_compile \
+            scripts/package_levipack.py
 
           echo "Python syntax OK"
 
-      - name: Validate source manifest
+      - name: Validate manifest
         shell: bash
         run: |
           set -e
-
-          echo "========================================"
-          echo "Source manifest"
-          echo "========================================"
 
           python3 - <<'PY'
           import json
@@ -83,23 +89,24 @@ jobs:
               path.read_text(encoding="utf-8")
           )
 
-          print(json.dumps(
-              data,
-              indent=2,
-              ensure_ascii=False
-          ))
-
           assert data["type"] == "preload-native"
           assert data["entry"] == "libOutlineRGB.so"
 
-          versions = data.get("minecraft_versions", [])
+          assert "1.26.4*" in data.get(
+              "minecraft_versions",
+              []
+          )
 
-          assert "1.26.4*" in versions, (
-              "minecraft_versions must contain 1.26.4*"
+          print(
+              json.dumps(
+                  data,
+                  indent=2,
+                  ensure_ascii=False
+              )
           )
 
           print()
-          print("Source manifest compatibility OK")
+          print("Manifest OK")
           PY
 
       - name: Configure Android ARM64
@@ -108,10 +115,10 @@ jobs:
           set -e
 
           xmake f \
+            -y \
             -p android \
             -a arm64-v8a \
-            -m release \
-            -y
+            -m release
 
       - name: Build
         shell: bash
@@ -120,13 +127,13 @@ jobs:
 
           xmake -y
 
-      - name: Locate ARM64 library
+      - name: Locate native library
         shell: bash
         run: |
           set -e
 
           echo "========================================"
-          echo "Searching for ARM64 shared library"
+          echo "Searching build output"
           echo "========================================"
 
           find build \
@@ -134,14 +141,19 @@ jobs:
             -name "*.so" \
             -print
 
-          LIBRARY="$(find build \
-            -type f \
-            -name "liboutlinergb.so" \
-            -print -quit)"
+          LIBRARY="$(
+            find build \
+              -type f \
+              -name "liboutlinergb.so" \
+              -print \
+              -quit
+          )"
 
           if [ -z "$LIBRARY" ]; then
             echo
-            echo "ERROR: liboutlinergb.so was not found."
+            echo "ERROR:"
+            echo "liboutlinergb.so was not found."
+            echo
             exit 1
           fi
 
@@ -151,43 +163,50 @@ jobs:
 
           mkdir -p dist
 
-          cp "$LIBRARY" dist/libOutlineRGB.so
+          cp \
+            "$LIBRARY" \
+            dist/libOutlineRGB.so
 
           echo
-          echo "Packaged build input:"
-          ls -lh dist/libOutlineRGB.so
+          echo "Final native library:"
+          ls -lh \
+            dist/libOutlineRGB.so
 
-      - name: Verify ARM64 ELF
+      - name: Verify ELF
         shell: bash
         run: |
           set -e
 
           echo "========================================"
-          echo "Checking ELF architecture"
+          echo "ELF verification"
           echo "========================================"
 
-          file dist/libOutlineRGB.so
+          file \
+            dist/libOutlineRGB.so
 
-          readelf -h dist/libOutlineRGB.so | tee /tmp/readelf.txt
+          readelf -h \
+            dist/libOutlineRGB.so \
+            | tee /tmp/readelf.txt
 
-          grep -q "AArch64" /tmp/readelf.txt
+          grep -q "AArch64" \
+            /tmp/readelf.txt
 
           echo
-          echo "ARM64/AArch64 ELF OK"
+          echo "AArch64 ELF OK"
 
       - name: Package LeviPack
         shell: bash
         run: |
           set -e
 
-          echo "========================================"
-          echo "Package LeviPack"
-          echo "========================================"
-
-          python3 scripts/package_levipack.py \
-            --library dist/libOutlineRGB.so \
-            --manifest assets/manifest.json \
-            --output dist/OutlineRGB.levipack
+          python3 \
+            scripts/package_levipack.py \
+            --library \
+            dist/libOutlineRGB.so \
+            --manifest \
+            assets/manifest.json \
+            --output \
+            dist/OutlineRGB.levipack
 
       - name: Verify LeviPack
         shell: bash
@@ -195,14 +214,14 @@ jobs:
           set -e
 
           echo "========================================"
-          echo "Final LeviPack"
+          echo "LeviPack verification"
           echo "========================================"
 
-          test -f dist/OutlineRGB.levipack
+          test -f \
+            dist/OutlineRGB.levipack
 
-          echo
-          echo "ZIP entries:"
-          unzip -l dist/OutlineRGB.levipack
+          unzip -l \
+            dist/OutlineRGB.levipack
 
           echo
           echo "Manifest:"
@@ -210,50 +229,73 @@ jobs:
             dist/OutlineRGB.levipack \
             manifest.json
 
-          echo
-          echo "========================================"
-          echo "Strict structure check"
-          echo "========================================"
-
           python3 - <<'PY'
           import json
           import zipfile
           from pathlib import Path
 
-          package = Path("dist/OutlineRGB.levipack")
+          package = Path(
+              "dist/OutlineRGB.levipack"
+          )
 
-          expected = {
-              "manifest.json",
+          expected = [
               "libOutlineRGB.so",
-          }
+              "manifest.json"
+          ]
 
-          with zipfile.ZipFile(package, "r") as z:
-              names = set(z.namelist())
+          with zipfile.ZipFile(
+              package,
+              "r"
+          ) as archive:
 
-              print("Actual:")
-              for name in sorted(names):
-                  print("  ", name)
+              names = archive.namelist()
+
+              print()
+              print("Actual entries:")
+
+              for name in names:
+                  print(
+                      f"  {name}"
+                  )
 
               assert names == expected, (
-                  f"Invalid package structure: {sorted(names)}"
+                  "Unexpected LeviPack structure: "
+                  f"{names}"
               )
 
               manifest = json.loads(
-                  z.read("manifest.json")
+                  archive.read(
+                      "manifest.json"
+                  )
               )
 
-              assert manifest["type"] == "preload-native"
-              assert manifest["entry"] == "libOutlineRGB.so"
-              assert "1.26.4*" in manifest["minecraft_versions"]
-
-              print()
-              print("Manifest compatibility:")
-              print(
-                  "  Minecraft 1.26.4* : OK"
+              assert (
+                  manifest["type"]
+                  == "preload-native"
               )
+
+              assert (
+                  manifest["entry"]
+                  == "libOutlineRGB.so"
+              )
+
+              assert (
+                  "1.26.4*"
+                  in manifest[
+                      "minecraft_versions"
+                  ]
+              )
+
+              info = archive.getinfo(
+                  "libOutlineRGB.so"
+              )
+
+              assert info.file_size > 0
 
           print()
-          print("LeviPack structure: OK")
+          print(
+              "LeviPack verification OK"
+          )
           PY
 
       - name: Upload LeviPack
