@@ -2,41 +2,30 @@
 
 #include <cstdint>
 #include <string_view>
-#include <vector>
 
 namespace outline::resolver {
 
-struct Candidate {
-    std::uintptr_t address{};
-    int score{};
+enum class Target : std::uint8_t {
+    Unknown = 0,
+
+    // Vanilla selection-box rendering target.
+    SelectionBox,
+
+    // Rendering/tessellation target used as fallback.
+    Tessellator,
+
+    // Render-level target.
+    RenderLevel,
 };
 
 bool initialize(std::string_view libraryName);
 
-bool ready();
+void shutdown();
 
-std::uintptr_t libraryBase();
+bool initialized();
 
-std::uintptr_t renderLevel();
+std::uintptr_t resolve(Target target);
 
-std::uintptr_t clientInstanceUpdate();
+const char* targetName(Target target);
 
-std::uintptr_t clientInstanceGetLocalPlayer();
-
-std::uintptr_t levelGetHitResult();
-
-std::uintptr_t tessellatorBegin();
-
-std::uintptr_t tessellatorColor();
-
-std::uintptr_t tessellatorVertex();
-
-std::uintptr_t meshRenderImmediately();
-
-std::uintptr_t meshRenderImmediately2();
-
-std::uintptr_t blockGetOutline();
-
-const std::vector<Candidate>& blockOutlineCandidates();
-
-}
+} // namespace outline::resolver
