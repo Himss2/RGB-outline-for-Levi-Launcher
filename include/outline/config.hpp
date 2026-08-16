@@ -1,27 +1,31 @@
 #pragma once
 
-#include <atomic>
+#include <cstdint>
 
 namespace outline {
 
 struct Config {
-    std::atomic_bool enabled{true};
+    bool enabled = true;
 
-    std::atomic_bool rgb{true};
+    // RGB animation
+    float saturation = 1.0f;
+    float brightness = 1.0f;
 
-    std::atomic<float> red{1.0f};
-    std::atomic<float> green{0.0f};
-    std::atomic<float> blue{0.0f};
-    std::atomic<float> alpha{1.0f};
+    // Animation speed.
+    // Higher = faster color transition.
+    float speed = 1.0f;
 
-    std::atomic<float> rgbSpeed{1.0f};
+    // Selection box line width.
+    float lineWidth = 2.0f;
 
-    std::atomic<float> thickness{0.025f};
+    // Prevent accidental rendering before
+    // the Minecraft target has been resolved.
+    bool requireResolvedTarget = true;
 };
 
 inline Config& config() {
-    static Config value;
-    return value;
+    static Config instance;
+    return instance;
 }
 
-}
+} // namespace outline
