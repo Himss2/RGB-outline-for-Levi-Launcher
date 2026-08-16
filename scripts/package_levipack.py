@@ -26,12 +26,18 @@ def load_manifest(path: Path) -> dict:
         fail(f"Manifest not found: {path}")
 
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(
+            path.read_text(encoding="utf-8")
+        )
     except json.JSONDecodeError as exc:
-        fail(f"Invalid JSON in manifest: {exc}")
+        fail(
+            f"Invalid JSON in manifest: {exc}"
+        )
 
     if not isinstance(data, dict):
-        fail("manifest.json must contain a JSON object.")
+        fail(
+            "manifest.json must contain a JSON object."
+        )
 
     return data
 
@@ -45,7 +51,11 @@ def validate_manifest(manifest: dict) -> None:
         "entry",
     ]
 
-    missing = [key for key in required if key not in manifest]
+    missing = [
+        key
+        for key in required
+        if key not in manifest
+    ]
 
     if missing:
         fail(
@@ -64,53 +74,49 @@ def validate_manifest(manifest: dict) -> None:
             f'"{PACKAGE_LIBRARY_NAME}".'
         )
 
-    versions = manifest.get("minecraft_versions", [])
+    versions = manifest.get(
+        "minecraft_versions",
+        []
+    )
 
     if not isinstance(versions, list):
-        fail('"minecraft_versions" must be an array.')
+        fail(
+            '"minecraft_versions" must be an array.'
+        )
 
     if SUPPORTED_VERSION_PREFIX + "*" not in versions:
         fail(
             'manifest must contain '
-            f'"minecraft_versions": ["{SUPPORTED_VERSION_PREFIX}*", ...]'
+            f'"{SUPPORTED_VERSION_PREFIX}*"'
+            " in minecraft_versions."
         )
 
 
 def normalize_manifest(manifest: dict) -> dict:
-    """
-    Normalize the manifest for the Android LeviLaunchroid
-    native-mod package.
-
-    We deliberately keep user metadata such as name, author,
-    and version, but force the runtime-critical fields.
-    """
-
     result = dict(manifest)
 
     result["type"] = "preload-native"
     result["entry"] = PACKAGE_LIBRARY_NAME
 
-    # Keep the package compatible with Minecraft 1.26.4x,
-    # including versions such as 1.26.44.3.
     result["minecraft_versions"] = [
         SUPPORTED_VERSION_PREFIX + "*"
     ]
 
-    # OutlineRGB does not overwrite any external files/folders.
     result["overwrite_files"] = []
     result["overwrite_folders"] = []
 
-    # The working reference mods use an empty icon field.
     result["icon"] = ""
 
     return result
 
 
 def find_library(path: Path) -> Path:
-    if path.is_file():
-        return path
+    if not path.is_file():
+        fail(
+            f"Shared library not found: {path}"
+        )
 
-    fail(f"Shared library not found: {path}")
+    return path
 
 
 def build_package(
@@ -141,10 +147,19 @@ def build_package(
 
     print("Manifest OK")
     print()
-    print(json.dumps(manifest, indent=2, ensure_ascii=False))
+    print(
+        json.dumps(
+            manifest,
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
     print()
 
-    output.parent.mkdir(parents=True, exist_ok=True)
+    output.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
 
     if output.exists():
         output.unlink()
@@ -169,15 +184,22 @@ def build_package(
         compresslevel=9,
     ) as archive:
 
-        # Keep manifest and library directly in package root.
-        archive.writestr(
-            PACKAGE_MANIFEST_NAME,
-            manifest_bytes,
-        )
+        # IMPORTANT:
+        # Match the reference LeviPack layout:
+        #
+        #   libOutlineRGB.so
+        #   manifest.json
+        #
+        # Both files are located directly at ZIP root.
 
         archive.write(
             library,
             PACKAGE_LIBRARY_NAME,
+        )
+
+        archive.writestr(
+            PACKAGE_MANIFEST_NAME,
+            manifest_bytes,
         )
 
     print()
@@ -202,12 +224,19 @@ def verify_package(
     print("=" * 40)
 
     if not output.is_file():
-        fail(f"LeviPack was not created: {output}")
+        fail(
+            f"LeviPack was not created: {output}"
+        )
 
-    with zipfile.ZipFile(output, "r") as archive:
+    with zipfile.ZipFile(
+        output,
+        "r",
+    ) as archive:
 
         names = archive.namelist()
 
+        # Expected order intentionally matches
+        # the known working reference LeviPack.
         expected = [
             PACKAGE_LIBRARY_NAME,
             PACKAGE_MANIFEST_NAME,
@@ -220,46 +249,61 @@ def verify_package(
                 f"Actual  : {names}"
             )
 
-        parsed_manifest = json.loads(
-            archive.read(PACKAGE_MANIFEST_NAME)
-            .decode("utf-8")
+        embedded_manifest = json.loads(
+            archive.read(
+                PACKAGE_MANIFEST_NAME
+            ).decode("utf-8")
         )
 
-        if parsed_manifest != manifest:
+        if embedded_manifest != manifest:
             fail(
-                "Embedded manifest.json does not match "
-                "the normalized manifest."
+                "Embedded manifest.json does not "
+                "match the normalized manifest."
             )
 
         library_info = archive.getinfo(
             PACKAGE_LIBRARY_NAME
         )
 
-        if library_info.file_size != library.stat().st_size:
+        if (
+            library_info.file_size
+            != library.stat().st_size
+        ):
             fail(
-                "Embedded libOutlineRGB.so size does not "
-                "match the built library."
+                "Embedded libOutlineRGB.so size "
+                "does not match the built library."
             )
 
-        if parsed_manifest.get("type") != "preload-native":
+        if (
+            embedded_manifest.get("type")
+            != "preload-native"
+        ):
             fail(
                 'Embedded manifest has invalid "type".'
             )
 
-        if parsed_manifest.get("entry") != PACKAGE_LIBRARY_NAME:
+        if (
+            embedded_manifest.get("entry")
+            != PACKAGE_LIBRARY_NAME
+        ):
             fail(
                 'Embedded manifest has invalid "entry".'
             )
 
-        versions = parsed_manifest.get(
+        versions = embedded_manifest.get(
             "minecraft_versions",
             [],
         )
 
-        if SUPPORTED_VERSION_PREFIX + "*" not in versions:
+        if (
+            SUPPORTED_VERSION_PREFIX + "*"
+            not in versions
+        ):
             fail(
                 "Embedded manifest does not declare "
-                f"Minecraft {SUPPORTED_VERSION_PREFIX}* compatibility."
+                f"Minecraft "
+                f"{SUPPORTED_VERSION_PREFIX}* "
+                "compatibility."
             )
 
     print("ZIP structure OK")
@@ -267,34 +311,45 @@ def verify_package(
     print("Library size OK")
     print("Minecraft compatibility OK")
     print()
-    print("LeviPack verification PASSED")
+    print(
+        "LeviPack verification PASSED"
+    )
     print()
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Build OutlineRGB Android LeviPack."
+        description=(
+            "Build OutlineRGB Android LeviPack."
+        )
     )
 
     parser.add_argument(
         "--library",
         required=True,
         type=Path,
-        help="Path to the built ARM64 shared library.",
+        help=(
+            "Path to the built ARM64 "
+            "shared library."
+        ),
     )
 
     parser.add_argument(
         "--manifest",
         required=True,
         type=Path,
-        help="Path to source manifest.json.",
+        help=(
+            "Path to source manifest.json."
+        ),
     )
 
     parser.add_argument(
         "--output",
         required=True,
         type=Path,
-        help="Output .levipack path.",
+        help=(
+            "Output .levipack path."
+        ),
     )
 
     args = parser.parse_args()
