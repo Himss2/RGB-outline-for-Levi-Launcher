@@ -3,10 +3,9 @@
 #include "outline/runtime.hpp"
 
 #include <android/log.h>
-#include <algorithm>
+
 #include <cmath>
 #include <cstdint>
-#include <cstring>
 
 #define LOG_TAG "OutlineRGB"
 
@@ -23,26 +22,58 @@ namespace {
 TessellatorBeginFn gBegin{};
 TessellatorColorFn gColor{};
 TessellatorVertexFn gVertex{};
+
 RenderMeshImmediatelyFn gRenderMesh{};
+RenderMeshImmediatelyFn gRenderMesh2{};
 
-constexpr std::uintptr_t kScreenContextColorHolder = 0x30;
-constexpr std::uintptr_t kScreenContextTessellator = 0xB8;
-constexpr std::uintptr_t kLevelRendererPlayer = 0x420;
-constexpr std::uintptr_t kLevelRendererPlayerCamera = 0x61C;
-constexpr std::uintptr_t kSelectionOverlayMaterial = 0x1030;
-constexpr std::uintptr_t kActorLevel = 464;
-constexpr std::uintptr_t kLevelHitResultWrapper = 456;
-constexpr std::uintptr_t kHitResultType = 24;
-constexpr std::uintptr_t kHitResultPos = 44;
+using ClientInstanceGetLocalPlayerFn =
+    void* (*)(void*);
 
-using ClientInstanceGetLocalPlayerFn = void* (*)(void*);
-using LevelGetHitResultFn = void* (*)(void*);
+using LevelGetHitResultFn =
+    void* (*)(void*);
 
-ClientInstanceGetLocalPlayerFn gGetLocalPlayer{};
-LevelGetHitResultFn gGetHitResult{};
+ClientInstanceGetLocalPlayerFn
+    gGetLocalPlayer{};
+
+LevelGetHitResultFn
+    gGetHitResult{};
+
+constexpr std::uintptr_t
+    kScreenContextColorHolder = 0x30;
+
+constexpr std::uintptr_t
+    kScreenContextTessellator = 0xB8;
+
+constexpr std::uintptr_t
+    kLevelRendererPlayer = 0x420;
+
+constexpr std::uintptr_t
+    kLevelRendererPlayerCamera = 0x61C;
+
+constexpr std::uintptr_t
+    kSelectionOverlayMaterial = 0x1030;
+
+constexpr std::uintptr_t
+    kActorLevel = 464;
+
+constexpr std::uintptr_t
+    kHitResultType = 24;
+
+constexpr std::uintptr_t
+    kHitResultStartPos = 0;
 
 bool validPtr(const void* ptr) {
-    return ptr && reinterpret_cast<std::uintptr_t>(ptr) >= 0x1000;
+    const auto value =
+        reinterpret_cast<std::uintptr_t>(ptr);
+
+    return value >= 0x1000;
+}
+
+bool finiteVec(const Vec3& value) {
+    return
+        std::isfinite(value.x) &&
+        std::isfinite(value.y) &&
+        std::isfinite(value.z);
 }
 
 void emitBox(
@@ -57,11 +88,12 @@ void emitBox(
     float b,
     float a
 ) {
-    Vec3 p[8] = {
+    Vec3 points[8] = {
         {min.x, min.y, min.z},
         {max.x, min.y, min.z},
         {max.x, min.y, max.z},
         {min.x, min.y, max.z},
+
         {min.x, max.y, min.z},
         {max.x, max.y, min.z},
         {max.x, max.y, max.z},
@@ -69,11 +101,27 @@ void emitBox(
     };
 
     static constexpr int edges[24] = {
-        0,1, 1,2, 2,3, 3,0,
-        4,5, 5,6, 6,7, 7,4,
-        0,4, 1,5, 2,6, 3,7
+        0, 1,
+        1, 2,
+        2, 3,
+        3, 0,
+
+        4, 5,
+        5, 6,
+        6, 7,
+        7, 4,
+
+        0, 4,
+        1, 5,
+        2, 6,
+        3, 7
     };
 
+    /*
+     * Reference BedrockTools renderer uses:
+     *
+     * Tessellator::begin(..., 4, vertexCount, ...)
+     */
     gBegin(
         tessellator,
         nullptr,
@@ -84,68 +132,140 @@ void emitBox(
 
     gColor(
         tessellator,
-        r, g, b, a
+        r,
+        g,
+        b,
+        a
     );
 
     for (int i = 0; i < 24; i += 2) {
-        const Vec3 a0 = {
-            p[edges[i]].x - camX,
-            p[edges[i]].y - camY,
-            p[edges[i]].z - camZ
-        };
+        const Vec3& p0 =
+            points[edges[i]];
 
-        const Vec3 a1 = {
-            p[edges[i + 1]].x - camX,
-            p[edges[i + 1]].y - camY,
-            p[edges[i + 1]].z - camZ
-        };
+        const Vec3& p1 =
+            points[edges[i + 1]];
 
-        gVertex(tessellator, a0.x, a0.y, a0.z);
-        gVertex(tessellator, a1.x, a1.y, a1.z);
+        gVertex(
+            tessellator,
+            p0.x - camX,
+            p0.y - camY,
+            p0.z - camZ
+        );
+
+        gVertex(
+            tessellator,
+            p1.x - camX,
+            p1.y - camY,
+            p1.z - camZ
+        );
     }
 }
 
 }
 
 bool initialize() {
-    gBegin = reinterpret_cast<TessellatorBeginFn>(
-        resolver::tessellatorBegin()
+    gBegin =
+        reinterpret_cast<TessellatorBeginFn>(
+            resolver::tessellatorBegin()
+        );
+
+    gColor =
+        reinterpret_cast<TessellatorColorFn>(
+            resolver::tessellatorColor()
+        );
+
+    gVertex =
+        reinterpret_cast<TessellatorVertexFn>(
+            resolver::tessellatorVertex()
+        );
+
+    gRenderMesh =
+        reinterpret_cast<RenderMeshImmediatelyFn>(
+            resolver::meshRenderImmediately()
+        );
+
+    gRenderMesh2 =
+        reinterpret_cast<RenderMeshImmediatelyFn>(
+            resolver::meshRenderImmediately2()
+        );
+
+    gGetLocalPlayer =
+        reinterpret_cast<
+            ClientInstanceGetLocalPlayerFn
+        >(
+            resolver::clientInstanceGetLocalPlayer()
+        );
+
+    gGetHitResult =
+        reinterpret_cast<
+            LevelGetHitResultFn
+        >(
+            resolver::levelGetHitResult()
+        );
+
+    LOGI(
+        "RenderLevel = %p",
+        reinterpret_cast<void*>(
+            resolver::renderLevel()
+        )
     );
 
-    gColor = reinterpret_cast<TessellatorColorFn>(
-        resolver::tessellatorColor()
+    LOGI(
+        "TessellatorBegin = %p",
+        reinterpret_cast<void*>(
+            resolver::tessellatorBegin()
+        )
     );
 
-    gVertex = reinterpret_cast<TessellatorVertexFn>(
-        resolver::tessellatorVertex()
+    LOGI(
+        "TessellatorColor = %p",
+        reinterpret_cast<void*>(
+            resolver::tessellatorColor()
+        )
     );
 
-    gRenderMesh = reinterpret_cast<RenderMeshImmediatelyFn>(
-        resolver::meshRenderImmediately()
+    LOGI(
+        "TessellatorVertex = %p",
+        reinterpret_cast<void*>(
+            resolver::tessellatorVertex()
+        )
     );
 
-    gGetLocalPlayer = reinterpret_cast<ClientInstanceGetLocalPlayerFn>(
-        resolver::clientInstanceGetLocalPlayer()
+    LOGI(
+        "RenderMeshImmediately = %p",
+        reinterpret_cast<void*>(
+            resolver::meshRenderImmediately()
+        )
     );
 
-    gGetHitResult = reinterpret_cast<LevelGetHitResultFn>(
-        resolver::levelGetHitResult()
+    LOGI(
+        "RenderMeshImmediately2 = %p",
+        reinterpret_cast<void*>(
+            resolver::meshRenderImmediately2()
+        )
     );
 
     const bool ok =
         gBegin &&
         gColor &&
         gVertex &&
-        gRenderMesh &&
+        (gRenderMesh2 || gRenderMesh) &&
         gGetLocalPlayer &&
         gGetHitResult;
 
-    if (ok)
-        LOGI("Renderer API ready");
-    else
-        LOGE("Renderer API incomplete");
+    if (!ok) {
+        LOGE(
+            "Renderer initialization FAILED"
+        );
 
-    return ok;
+        return false;
+    }
+
+    LOGI(
+        "Renderer initialization OK"
+    );
+
+    return true;
 }
 
 bool ready() {
@@ -153,122 +273,318 @@ bool ready() {
         gBegin &&
         gColor &&
         gVertex &&
-        gRenderMesh;
+        (gRenderMesh2 || gRenderMesh);
 }
 
-void renderSelection(void* levelRenderer, void* screenContext) {
+void renderSelection(
+    void* levelRenderer,
+    void* screenContext
+) {
     static std::uint64_t frameCounter = 0;
+
     ++frameCounter;
 
-    if (!ready() || !validPtr(levelRenderer) || !validPtr(screenContext))
+    if (!ready())
         return;
 
-    const auto screen = reinterpret_cast<std::uintptr_t>(screenContext);
-    const auto tessPtr = *reinterpret_cast<std::uintptr_t*>(
-        screen + kScreenContextTessellator
-    );
-
-    if (tessPtr < 0x1000)
+    if (!validPtr(levelRenderer))
         return;
 
-    auto* tessellator = reinterpret_cast<Tessellator*>(tessPtr);
+    if (!validPtr(screenContext))
+        return;
 
-    const auto renderer = reinterpret_cast<std::uintptr_t>(levelRenderer);
-    const auto lrpPtr = *reinterpret_cast<std::uintptr_t*>(
-        renderer + kLevelRendererPlayer
-    );
+    /*
+     * ScreenContext::mTessellator = 0xB8
+     */
+    const auto screen =
+        reinterpret_cast<std::uintptr_t>(
+            screenContext
+        );
+
+    const auto tessellatorPtr =
+        *reinterpret_cast<std::uintptr_t*>(
+            screen +
+            kScreenContextTessellator
+        );
+
+    if (tessellatorPtr < 0x1000)
+        return;
+
+    auto* tessellator =
+        reinterpret_cast<Tessellator*>(
+            tessellatorPtr
+        );
+
+    /*
+     * LevelRenderer::mLevelRendererPlayer = 0x420
+     */
+    const auto renderer =
+        reinterpret_cast<std::uintptr_t>(
+            levelRenderer
+        );
+
+    const auto lrpPtr =
+        *reinterpret_cast<std::uintptr_t*>(
+            renderer +
+            kLevelRendererPlayer
+        );
 
     if (lrpPtr < 0x1000)
         return;
 
-    const float camX = *reinterpret_cast<float*>(
-        lrpPtr + kLevelRendererPlayerCamera
-    );
-    const float camY = *reinterpret_cast<float*>(
-        lrpPtr + kLevelRendererPlayerCamera + 4
-    );
-    const float camZ = *reinterpret_cast<float*>(
-        lrpPtr + kLevelRendererPlayerCamera + 8
-    );
+    /*
+     * LevelRendererPlayer::mCamPos = 0x61C
+     */
+    const float camX =
+        *reinterpret_cast<float*>(
+            lrpPtr +
+            kLevelRendererPlayerCamera
+        );
 
-    void* material = *reinterpret_cast<void**>(
-        lrpPtr + kSelectionOverlayMaterial
-    );
+    const float camY =
+        *reinterpret_cast<float*>(
+            lrpPtr +
+            kLevelRendererPlayerCamera +
+            4
+        );
+
+    const float camZ =
+        *reinterpret_cast<float*>(
+            lrpPtr +
+            kLevelRendererPlayerCamera +
+            8
+        );
+
+    if (!std::isfinite(camX) ||
+        !std::isfinite(camY) ||
+        !std::isfinite(camZ)) {
+        return;
+    }
+
+    /*
+     * IMPORTANT:
+     *
+     * mSelectionOverlayMaterial is a MaterialPtr
+     * object embedded at +0x1030.
+     *
+     * Do NOT dereference it into another pointer.
+     *
+     * BedrockTools uses the address of the field
+     * when no separately resolved MaterialPtr is used.
+     */
+    void* material =
+        reinterpret_cast<void*>(
+            lrpPtr +
+            kSelectionOverlayMaterial
+        );
 
     if (!validPtr(material))
         return;
 
-    void* client = runtime::clientInstance();
-    if (!validPtr(client) || !gGetLocalPlayer || !gGetHitResult)
+    /*
+     * Obtain ClientInstance captured by
+     * ClientInstanceUpdate.
+     */
+    void* client =
+        runtime::clientInstance();
+
+    if (!validPtr(client))
         return;
 
-    void* player = gGetLocalPlayer(client);
+    if (!gGetLocalPlayer)
+        return;
+
+    if (!gGetHitResult)
+        return;
+
+    void* player =
+        gGetLocalPlayer(client);
+
     if (!validPtr(player))
         return;
 
-    const auto playerAddr = reinterpret_cast<std::uintptr_t>(player);
-    void* level = *reinterpret_cast<void**>(
-        playerAddr + kActorLevel
-    );
+    /*
+     * Actor::mLevel = 464
+     */
+    const auto playerAddr =
+        reinterpret_cast<std::uintptr_t>(
+            player
+        );
+
+    void* level =
+        *reinterpret_cast<void**>(
+            playerAddr +
+            kActorLevel
+        );
 
     if (!validPtr(level))
         return;
 
-    void* hit = gGetHitResult(level);
+    /*
+     * LevelGetHitResult(Level*)
+     */
+    void* hit =
+        gGetHitResult(level);
+
     if (!validPtr(hit))
         return;
 
-    const auto hitAddr = reinterpret_cast<std::uintptr_t>(hit);
-    const int hitType = *reinterpret_cast<int*>(
-        hitAddr + kHitResultType
-    );
+    const auto hitAddr =
+        reinterpret_cast<std::uintptr_t>(
+            hit
+        );
 
-    // BedrockTools' HitResult handling treats type 0/1 as valid hits;
-    // for the block selection box we only accept type 0.
+    /*
+     * HitResult::mType = 24
+     *
+     * BedrockTools treats type 0 and type 1
+     * as valid hit results.
+     *
+     * For a block selection box we require type 0.
+     */
+    const int hitType =
+        *reinterpret_cast<int*>(
+            hitAddr +
+            kHitResultType
+        );
+
     if (hitType != 0)
         return;
 
-    const Vec3 hitPos = *reinterpret_cast<Vec3*>(
-        hitAddr + kHitResultPos
-    );
+    /*
+     * HitResult::mStartPos = 0.
+     *
+     * The stored hit result contains the selected
+     * block position data beginning here.
+     */
+    const Vec3 hitPos =
+        *reinterpret_cast<const Vec3*>(
+            hitAddr +
+            kHitResultStartPos
+        );
 
-    if (!std::isfinite(hitPos.x) ||
-        !std::isfinite(hitPos.y) ||
-        !std::isfinite(hitPos.z)) {
+    if (!finiteVec(hitPos))
         return;
-    }
 
-    const float bx = std::floor(hitPos.x);
-    const float by = std::floor(hitPos.y);
-    const float bz = std::floor(hitPos.z);
+    const float blockX =
+        std::floor(hitPos.x);
 
-    // First runtime milestone: a vanilla-sized 1x1x1 block selection box.
-    // The exact Block::getOutline/AABB path will replace this once the
-    // verified 26.44 block-shape function is wired in.
-    const Vec3 min = {
-        bx + 0.002f,
-        by + 0.002f,
-        bz + 0.002f
+    const float blockY =
+        std::floor(hitPos.y);
+
+    const float blockZ =
+        std::floor(hitPos.z);
+
+    /*
+     * Current verified runtime milestone:
+     *
+     * selected block -> world position -> AABB
+     * -> Tessellator geometry -> render mesh.
+     *
+     * This deliberately uses the vanilla full-block
+     * selection volume first.
+     *
+     * The unverified Block::getOutline candidate is
+     * NOT called because doing so without its exact
+     * ABI would be unsafe.
+     */
+    constexpr float epsilon = 0.002f;
+
+    const Vec3 min{
+        blockX + epsilon,
+        blockY + epsilon,
+        blockZ + epsilon
     };
 
-    const Vec3 max = {
-        bx + 0.998f,
-        by + 0.998f,
-        bz + 0.998f
+    const Vec3 max{
+        blockX + 1.0f - epsilon,
+        blockY + 1.0f - epsilon,
+        blockZ + 1.0f - epsilon
     };
+
+    /*
+     * Simple RGB proof-of-life.
+     *
+     * This is intentionally deterministic and does
+     * not depend on external configuration yet.
+     */
+    const std::uint64_t phase =
+        (frameCounter / 8) % 6;
 
     float r = 1.0f;
     float g = 0.0f;
     float b = 0.0f;
 
-    // Temporary RGB proof-of-life. Once the hook/render path is proven,
-    // this becomes the configurable animation from Config.
-    if ((frameCounter / 2) % 3 == 1) {
-        r = 0.0f;
-        g = 1.0f;
-    } else if ((frameCounter / 2) % 3 == 2) {
-        r = 0.0f;
-        b = 1.0f;
+    switch (phase) {
+        case 0:
+            r = 1.0f;
+            g = 0.0f;
+            b = 0.0f;
+            break;
+
+        case 1:
+            r = 1.0f;
+            g = 0.5f;
+            b = 0.0f;
+            break;
+
+        case 2:
+            r = 1.0f;
+            g = 1.0f;
+            b = 0.0f;
+            break;
+
+        case 3:
+            r = 0.0f;
+            g = 1.0f;
+            b = 0.0f;
+            break;
+
+        case 4:
+            r = 0.0f;
+            g = 0.5f;
+            b = 1.0f;
+            break;
+
+        case 5:
+            r = 0.5f;
+            g = 0.0f;
+            b = 1.0f;
+            break;
+    }
+
+    /*
+     * Reference BedrockTools temporarily forces
+     * ScreenContext color holder to white before
+     * submitting the selection mesh.
+     */
+    const auto colorHolderPtr =
+        *reinterpret_cast<std::uintptr_t*>(
+            screen +
+            0x30
+        );
+
+    float savedColor[4]{};
+
+    bool restoreColor = false;
+
+    if (colorHolderPtr >= 0x1000) {
+        auto* colorHolder =
+            reinterpret_cast<float*>(
+                colorHolderPtr
+            );
+
+        savedColor[0] = colorHolder[0];
+        savedColor[1] = colorHolder[1];
+        savedColor[2] = colorHolder[2];
+        savedColor[3] = colorHolder[3];
+
+        colorHolder[0] = 1.0f;
+        colorHolder[1] = 1.0f;
+        colorHolder[2] = 1.0f;
+        colorHolder[3] = 1.0f;
+
+        restoreColor = true;
     }
 
     emitBox(
@@ -284,14 +600,39 @@ void renderSelection(void* levelRenderer, void* screenContext) {
         1.0f
     );
 
+    /*
+     * RenderMeshImmediately2 is preferred by the
+     * BedrockTools 26.44 implementation.
+     */
     char pad[0x58]{};
 
-    gRenderMesh(
-        screenContext,
-        tessellator,
-        material,
-        pad
-    );
+    if (gRenderMesh2) {
+        gRenderMesh2(
+            screenContext,
+            tessellator,
+            material,
+            pad
+        );
+    } else if (gRenderMesh) {
+        gRenderMesh(
+            screenContext,
+            tessellator,
+            material,
+            pad
+        );
+    }
+
+    if (restoreColor) {
+        auto* colorHolder =
+            reinterpret_cast<float*>(
+                colorHolderPtr
+            );
+
+        colorHolder[0] = savedColor[0];
+        colorHolder[1] = savedColor[1];
+        colorHolder[2] = savedColor[2];
+        colorHolder[3] = savedColor[3];
+    }
 }
 
 }
