@@ -2,8 +2,6 @@
 
 #include "types.hpp"
 
-#include <cstdint>
-
 namespace outline::renderer {
 
 using Tessellator = void;
@@ -22,8 +20,12 @@ using RenderMeshImmediatelyFn =
     void (*)(ScreenContext*, Tessellator*, void*, char*);
 
 bool initialize();
+
 bool ready();
 
-void renderSelection(void* levelRenderer, void* screenContext);
+void renderSelection(
+    void* levelRenderer,
+    void* screenContext
+);
 
 }
