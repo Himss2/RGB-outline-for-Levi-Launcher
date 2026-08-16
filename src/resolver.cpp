@@ -5,8 +5,10 @@
 #include <link.h>
 
 #include <algorithm>
+#include <cinttypes>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <string_view>
@@ -42,12 +44,34 @@ std::uintptr_t gBlockGetOutline{};
 
 std::vector<Candidate> gBlockCandidates;
 
+/*
+ * Only memory ranges that are actually readable are placed here.
+ *
+ * This is important on Android because an ELF executable segment
+ * described by PT_LOAD/PF_X is not by itself a guarantee that every
+ * address in the calculated range can safely be read.
+ */
+struct ScanRange {
+    std::uintptr_t begin{};
+    std::uintptr_t end{};
+
+    bool valid() const {
+        return begin != 0 && end > begin;
+    }
+};
+
+std::vector<ScanRange> gScanRanges;
+
 struct PatternByte {
     std::uint8_t value{};
     bool wildcard{};
 };
 
 using Pattern = std::vector<PatternByte>;
+
+/* ------------------------------------------------------------- */
+/* Pattern parser                                                 */
+/* ------------------------------------------------------------- */
 
 Pattern parsePattern(std::string_view text) {
     Pattern result;
@@ -110,12 +134,69 @@ Pattern parsePattern(std::string_view text) {
     return result;
 }
 
+/* ------------------------------------------------------------- */
+/* Safe memory-range helpers                                      */
+/* ------------------------------------------------------------- */
+
+bool rangeContains(
+    const ScanRange& range,
+    std::uintptr_t address,
+    std::size_t size
+) {
+    if (!range.valid())
+        return false;
+
+    if (address < range.begin)
+        return false;
+
+    if (size == 0)
+        return address <= range.end;
+
+    if (address > range.end)
+        return false;
+
+    const std::uintptr_t remaining =
+        range.end - address;
+
+    return remaining >= size;
+}
+
+/*
+ * Find whether an address range is completely contained inside one
+ * readable mapping.
+ *
+ * We deliberately require the entire pattern to fit inside a single
+ * mapping. This prevents a signature from crossing a mapping boundary.
+ */
+bool readableRangeContains(
+    std::uintptr_t address,
+    std::size_t size
+) {
+    for (const auto& range : gScanRanges) {
+        if (rangeContains(range, address, size))
+            return true;
+    }
+
+    return false;
+}
+
+/* ------------------------------------------------------------- */
+/* Safe pattern matching                                          */
+/* ------------------------------------------------------------- */
+
 bool matchPattern(
     std::uintptr_t address,
     const Pattern& pattern
 ) {
     if (!address || pattern.empty())
         return false;
+
+    if (!readableRangeContains(
+            address,
+            pattern.size()
+        )) {
+        return false;
+    }
 
     const auto* bytes =
         reinterpret_cast<const std::uint8_t*>(
@@ -132,25 +213,30 @@ bool matchPattern(
     return true;
 }
 
-std::vector<std::uintptr_t> scan(
-    std::uintptr_t begin,
-    std::uintptr_t end,
+/* ------------------------------------------------------------- */
+/* Scan one readable mapping                                      */
+/* ------------------------------------------------------------- */
+
+std::vector<std::uintptr_t> scanRange(
+    const ScanRange& range,
     const Pattern& pattern
 ) {
     std::vector<std::uintptr_t> result;
 
-    if (!begin ||
-        end <= begin ||
+    if (!range.valid() ||
         pattern.empty() ||
-        end - begin < pattern.size()) {
+        range.end - range.begin < pattern.size()) {
         return result;
     }
 
     const std::uintptr_t last =
-        end - pattern.size();
+        range.end - pattern.size();
 
+    /*
+     * AArch64 instructions are 4-byte aligned.
+     */
     for (
-        std::uintptr_t address = begin;
+        std::uintptr_t address = range.begin;
         address <= last;
         address += 4
     ) {
@@ -161,11 +247,55 @@ std::vector<std::uintptr_t> scan(
     return result;
 }
 
+/* ------------------------------------------------------------- */
+/* Scan all safe ranges                                           */
+/* ------------------------------------------------------------- */
+
+std::vector<std::uintptr_t> scan(
+    const Pattern& pattern
+) {
+    std::vector<std::uintptr_t> result;
+
+    if (pattern.empty())
+        return result;
+
+    for (const auto& range : gScanRanges) {
+        const auto matches =
+            scanRange(
+                range,
+                pattern
+            );
+
+        result.insert(
+            result.end(),
+            matches.begin(),
+            matches.end()
+        );
+    }
+
+    return result;
+}
+
+/* ------------------------------------------------------------- */
+/* Candidate scoring                                              */
+/* ------------------------------------------------------------- */
+
 int scoreFunction(
     std::uintptr_t address
 ) {
     if (!address)
         return 0;
+
+    /*
+     * We read exactly 8 bytes, therefore verify that the address is
+     * inside a readable mapping first.
+     */
+    if (!readableRangeContains(
+            address,
+            sizeof(std::uint32_t) * 2
+        )) {
+        return 0;
+    }
 
     const auto* code =
         reinterpret_cast<const std::uint32_t*>(
@@ -186,6 +316,10 @@ int scoreFunction(
     return score;
 }
 
+/* ------------------------------------------------------------- */
+/* Module discovery via dl_iterate_phdr                           */
+/* ------------------------------------------------------------- */
+
 int phdrCallback(
     dl_phdr_info* info,
     std::size_t,
@@ -193,6 +327,9 @@ int phdrCallback(
 ) {
     auto* wanted =
         static_cast<std::string*>(user);
+
+    if (!info || !wanted)
+        return 0;
 
     if (!info->dlpi_name)
         return 0;
@@ -216,6 +353,14 @@ int phdrCallback(
             info->dlpi_addr
         );
 
+    /*
+     * Determine the ELF executable range as a reference only.
+     *
+     * We DO NOT scan this range directly.
+     *
+     * Actual scanning ranges are populated from /proc/self/maps
+     * below, where memory permissions are explicitly available.
+     */
     for (
         std::size_t i = 0;
         i < info->dlpi_phnum;
@@ -254,20 +399,249 @@ int phdrCallback(
     return 1;
 }
 
+/* ------------------------------------------------------------- */
+/* /proc/self/maps discovery                                      */
+/* ------------------------------------------------------------- */
+
+bool findReadableExecutableMappings(
+    std::string_view libraryName
+) {
+    gScanRanges.clear();
+
+    FILE* maps =
+        std::fopen(
+            "/proc/self/maps",
+            "re"
+        );
+
+    if (!maps) {
+        LOGE(
+            "Unable to open /proc/self/maps"
+        );
+
+        return false;
+    }
+
+    char line[1024]{};
+
+    while (std::fgets(
+        line,
+        sizeof(line),
+        maps
+    )) {
+        unsigned long long beginRaw{};
+        unsigned long long endRaw{};
+        unsigned long long offsetRaw{};
+
+        char permissions[5]{};
+        char path[768]{};
+
+        const int parsed =
+            std::sscanf(
+                line,
+                "%llx-%llx %4s %llx %*s %*s %767[^\n]",
+                &beginRaw,
+                &endRaw,
+                permissions,
+                &offsetRaw,
+                path
+            );
+
+        if (parsed < 4)
+            continue;
+
+        /*
+         * We need READ + EXECUTE.
+         *
+         * "r-xp" is the normal executable file mapping.
+         *
+         * We intentionally do not accept:
+         *
+         *   -r--p
+         *   rw-p
+         *   --xp
+         *
+         * because our scanner dereferences the memory directly.
+         */
+        if (permissions[0] != 'r' ||
+            permissions[2] != 'x') {
+            continue;
+        }
+
+        if (beginRaw >= endRaw)
+            continue;
+
+        if (parsed < 5)
+            continue;
+
+        std::string mappedPath(path);
+
+        /*
+         * Strip a possible leading space.
+         */
+        while (
+            !mappedPath.empty() &&
+            mappedPath.front() == ' '
+        ) {
+            mappedPath.erase(
+                mappedPath.begin()
+            );
+        }
+
+        /*
+         * Strip " (deleted)".
+         *
+         * Android may expose a deleted/shared-object path this way.
+         */
+        constexpr std::string_view deletedSuffix =
+            " (deleted)";
+
+        if (
+            mappedPath.size() >=
+            deletedSuffix.size() &&
+            mappedPath.compare(
+                mappedPath.size() -
+                    deletedSuffix.size(),
+                deletedSuffix.size(),
+                deletedSuffix
+            ) == 0
+        ) {
+            mappedPath.erase(
+                mappedPath.size() -
+                    deletedSuffix.size()
+            );
+        }
+
+        const char* slash =
+            std::strrchr(
+                mappedPath.c_str(),
+                '/'
+            );
+
+        const char* filename =
+            slash
+                ? slash + 1
+                : mappedPath.c_str();
+
+        if (
+            std::string_view(filename) !=
+            libraryName
+        ) {
+            continue;
+        }
+
+        const ScanRange range{
+            static_cast<std::uintptr_t>(
+                beginRaw
+            ),
+            static_cast<std::uintptr_t>(
+                endRaw
+            )
+        };
+
+        if (!range.valid())
+            continue;
+
+        gScanRanges.push_back(range);
+
+        LOGI(
+            "Readable executable mapping: "
+            "%p - %p perms=%s offset=0x%llx",
+            reinterpret_cast<void*>(
+                range.begin
+            ),
+            reinterpret_cast<void*>(
+                range.end
+            ),
+            permissions,
+            offsetRaw
+        );
+    }
+
+    std::fclose(maps);
+
+    /*
+     * Sort ranges so diagnostic output is deterministic.
+     */
+    std::sort(
+        gScanRanges.begin(),
+        gScanRanges.end(),
+        [](const ScanRange& a,
+           const ScanRange& b) {
+            return a.begin < b.begin;
+        }
+    );
+
+    /*
+     * Remove exact duplicates.
+     */
+    gScanRanges.erase(
+        std::unique(
+            gScanRanges.begin(),
+            gScanRanges.end(),
+            [](const ScanRange& a,
+               const ScanRange& b) {
+                return
+                    a.begin == b.begin &&
+                    a.end == b.end;
+            }
+        ),
+        gScanRanges.end()
+    );
+
+    return !gScanRanges.empty();
+}
+
+/* ------------------------------------------------------------- */
+/* Module discovery                                               */
+/* ------------------------------------------------------------- */
+
 bool findModule(
     std::string_view libraryName
 ) {
     std::string wanted(libraryName);
 
     gModule = {};
+    gScanRanges.clear();
 
+    /*
+     * First ask the dynamic linker whether the library is loaded.
+     */
     dl_iterate_phdr(
         phdrCallback,
         &wanted
     );
 
-    return gModule.valid();
+    if (!gModule.valid()) {
+        return false;
+    }
+
+    /*
+     * Then ask the kernel's memory-map view which parts are
+     * actually readable + executable.
+     */
+    if (!findReadableExecutableMappings(
+            libraryName
+        )) {
+        LOGE(
+            "No readable executable mapping "
+            "found for %.*s",
+            static_cast<int>(
+                libraryName.size()
+            ),
+            libraryName.data()
+        );
+
+        gModule = {};
+        return false;
+    }
+
+    return true;
 }
+
+/* ------------------------------------------------------------- */
+/* Signatures                                                     */
+/* ------------------------------------------------------------- */
 
 const Pattern& patternRenderLevel() {
     static const Pattern pattern =
@@ -428,16 +802,16 @@ const Pattern& patternBlockGetOutlineDiscovery() {
     return pattern;
 }
 
+/* ------------------------------------------------------------- */
+/* Resolver                                                       */
+/* ------------------------------------------------------------- */
+
 std::uintptr_t resolveUnique(
     const Pattern& pattern,
     const char* name
 ) {
     const auto matches =
-        scan(
-            gModule.textBegin,
-            gModule.textEnd,
-            pattern
-        );
+        scan(pattern);
 
     if (matches.empty()) {
         LOGE(
@@ -471,13 +845,19 @@ std::uintptr_t resolveUnique(
 
 }
 
+/* ------------------------------------------------------------- */
+/* Public API                                                     */
+/* ------------------------------------------------------------- */
+
 bool initialize(
     std::string_view libraryName
 ) {
     if (!findModule(libraryName)) {
         LOGE(
             "Unable to locate %.*s",
-            static_cast<int>(libraryName.size()),
+            static_cast<int>(
+                libraryName.size()
+            ),
             libraryName.data()
         );
 
@@ -490,10 +870,36 @@ bool initialize(
     );
 
     LOGI(
-        "Executable range = %p - %p",
-        reinterpret_cast<void*>(gModule.textBegin),
-        reinterpret_cast<void*>(gModule.textEnd)
+        "ELF executable range = %p - %p",
+        reinterpret_cast<void*>(
+            gModule.textBegin
+        ),
+        reinterpret_cast<void*>(
+            gModule.textEnd
+        )
     );
+
+    LOGI(
+        "Readable executable mappings = %zu",
+        gScanRanges.size()
+    );
+
+    for (
+        std::size_t i = 0;
+        i < gScanRanges.size();
+        ++i
+    ) {
+        LOGI(
+            "ScanRange[%zu] = %p - %p",
+            i,
+            reinterpret_cast<void*>(
+                gScanRanges[i].begin
+            ),
+            reinterpret_cast<void*>(
+                gScanRanges[i].end
+            )
+        );
+    }
 
     gRenderLevel =
         resolveUnique(
@@ -553,8 +959,6 @@ bool initialize(
 
     const auto blockMatches =
         scan(
-            gModule.textBegin,
-            gModule.textEnd,
             patternBlockGetOutlineDiscovery()
         );
 
@@ -568,7 +972,8 @@ bool initialize(
     std::sort(
         gBlockCandidates.begin(),
         gBlockCandidates.end(),
-        [](const Candidate& a, const Candidate& b) {
+        [](const Candidate& a,
+           const Candidate& b) {
             return a.score > b.score;
         }
     );
@@ -579,10 +984,11 @@ bool initialize(
     );
 
     /*
-     * Do NOT use an unverified candidate as Block::getOutline.
+     * Do not treat the discovery candidates as a verified
+     * Block::getOutline implementation.
      *
-     * The selection renderer currently uses the selected block
-     * position and the vanilla full-cube selection geometry.
+     * We still keep this disabled until the ABI/function identity
+     * is proven.
      */
     gBlockGetOutline = 0;
 
