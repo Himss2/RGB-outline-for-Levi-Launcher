@@ -73,13 +73,24 @@ void renderLevelHook(
         );
 
     /*
-     * Always let vanilla render first.
+     * Biarkan Minecraft menggambar dunianya secara normal terlebih dahulu.
      */
     if (original) {
         original(
             levelRenderer,
             screenContext
         );
+    }
+
+    /*
+     * --- PENGECEKAN HOOK ---
+     * Tambahkan log ini untuk memastikan hook RenderLevel 
+     * benar-benar dieksekusi oleh game secara berkala.
+     */
+    static int frameCount = 0;
+    frameCount++;
+    if (frameCount % 60 == 0) { // Tampilkan log setiap ~60 frame (sekitar 1 detik)
+        LOGI("RenderLevel Hook BEKERJA! ScreenContext: %p", screenContext);
     }
 
     /*
@@ -94,7 +105,7 @@ void renderLevelHook(
     outline::Color redOutline = {1.0f, 0.0f, 0.0f, 1.0f};
 
     /*
-     * Then draw our overlay.
+     * Kirimkan kordinat kotak ke mesin renderer kita.
      */
     renderer::renderSelectionBox(
         screenContext,
