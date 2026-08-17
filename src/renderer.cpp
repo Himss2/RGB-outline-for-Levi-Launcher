@@ -2,6 +2,7 @@
 #include "outline/resolver.hpp"
 
 #include <cmath>
+#include <cstdint>
 
 namespace outline::renderer {
 
@@ -14,12 +15,10 @@ bool g_initialized = false;
 bool initialize() {
     /*
      * Rendering is intentionally passive for now.
-     *
      * We first need a confirmed vanilla selection-box
      * rendering path for Minecraft 26.44 before installing
      * a hook into it.
      */
-
     g_initialized = true;
     return true;
 }
@@ -46,7 +45,6 @@ void buildBoxEdges(
      * |      |
      * 3 ---- 2
      */
-
     edges[0] = {a.x, a.y, a.z};
     edges[1] = {b.x, a.y, a.z};
 
@@ -62,7 +60,6 @@ void buildBoxEdges(
     /*
      * Top.
      */
-
     edges[8]  = {a.x, b.y, a.z};
     edges[9]  = {b.x, b.y, a.z};
 
@@ -78,7 +75,6 @@ void buildBoxEdges(
     /*
      * Vertical edges.
      */
-
     edges[16] = {a.x, a.y, a.z};
     edges[17] = {a.x, b.y, a.z};
 
@@ -116,52 +112,51 @@ void renderSelectionBox(
     using FnTessBegin = void (*)(void* _this, int topology);
     using FnTessVertex = void (*)(void* _this, float x, float y, float z);
     using FnTessColor = void (*)(void* _this, float r, float g, float b, float a);
-    using FnRenderMesh = void (*)(void* screenContext, void* tessellator, void* material);
+    using FnRenderMesh = void (*)(void* screenCtx, void* tess, void* mat);
 
     auto tBegin  = reinterpret_cast<FnTessBegin>(resolver::tessellatorBegin());
     auto tVertex = reinterpret_cast<FnTessVertex>(resolver::tessellatorVertex());
     auto tColor  = reinterpret_cast<FnTessColor>(resolver::tessellatorColor());
     
-    // Pilih render immediately yang valid
     auto rMesh = reinterpret_cast<FnRenderMesh>(
         resolver::meshRenderImmediately() ? resolver::meshRenderImmediately() : resolver::meshRenderImmediately2()
     );
 
-    // Keamanan: Jika ada 1 saja alamat yang gagal di-resolve, batalkan render agar tidak crash
     if (!tBegin || !tVertex || !tColor || !rMesh) {
         return; 
     }
 
-    Vec3 edges[24]{};
-
-    buildBoxEdges(
-        box.bounds,
-        edges
+    // 2. Ekstrak Instance Tessellator dari ScreenContext (Kandidat kuat: Offset +0x30)
+    void* tessellatorInstance = *reinterpret_cast<void**>(
+        reinterpret_cast<std::uintptr_t>(screenContext) + 0x30
     );
 
-    // 2. Dapatkan Instance Tessellator dan Material
-    // SEMENTARA KITA GUNAKAN NULL/ALAMAT DUMMY JIKA BELUM ADA POINTERNYA
-    void* tessellatorInstance = reinterpret_cast<void*>(0x0); // Ganti dengan pointer Tessellator asli nanti
-    void* materialPtr = reinterpret_cast<void*>(0x0); // Ganti dengan material vanilla
-
-    // PERHATIAN: Jika tessellatorInstance masih NULL, baris di bawah ini akan memblokir
-    // proses render agar game tidak crash. Hapus return ini setelah Anda memiliki instance yang valid!
     if (!tessellatorInstance) {
-        return; 
+        return; // Mencegah crash jika struktur ScreenContext berubah
     }
 
-    // 3. Mulai Menggambar (Topology 1 = Lines, 3 = LineStrip)
-    tBegin(tessellatorInstance, 1); 
+    // 3. Kalkulasi Alamat Material UI Dinamis
+    // Menggunakan UI Material Table RVA 0x125A3280, Index 1 (ui_fill_color) = +0x10 -> 0x125A3290
+    std::uintptr_t baseAddress = resolver::libraryBase();
+    if (!baseAddress) {
+        return;
+    }
+    void* materialPtr = reinterpret_cast<void*>(baseAddress + 0x125A3290);
 
-    // 4. Setel Warna (Format RGBA)
+    // 4. Bangun kordinat sudut kotak (AABB)
+    Vec3 edges[24]{};
+    buildBoxEdges(box.bounds, edges);
+
+    // 5. Eksekusi Mesin Gambar Minecraft (Tessellator)
+    tBegin(tessellatorInstance, 1); // Topology 1 = Lines
+
     tColor(tessellatorInstance, color.r, color.g, color.b, color.a);
 
-    // 5. Masukkan ke-24 kordinat sudut sebagai Vertex
     for (int i = 0; i < 24; ++i) {
         tVertex(tessellatorInstance, edges[i].x, edges[i].y, edges[i].z);
     }
 
-    // 6. Eksekusi ke Layar
+    // 6. Gambar ke Layar (X0 = screenContext, X1 = tessellator, X2 = materialPtr)
     rMesh(screenContext, tessellatorInstance, materialPtr);
 }
 
