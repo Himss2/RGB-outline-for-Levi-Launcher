@@ -1,4 +1,5 @@
 #include "outline/renderer.hpp"
+#include "outline/resolver.hpp"
 
 #include <cmath>
 
@@ -92,6 +93,7 @@ void buildBoxEdges(
 }
 
 void renderSelectionBox(
+    void* screenContext,
     const SelectionBox& box,
     const Color& color
 ) {
@@ -99,7 +101,7 @@ void renderSelectionBox(
         return;
     }
 
-    if (!box.valid) {
+    if (!box.valid || !screenContext) {
         return;
     }
 
@@ -110,6 +112,26 @@ void renderSelectionBox(
         return;
     }
 
+    // 1. Cast alamat memori dari resolver ke Function Pointer AArch64
+    using FnTessBegin = void (*)(void* _this, int topology);
+    using FnTessVertex = void (*)(void* _this, float x, float y, float z);
+    using FnTessColor = void (*)(void* _this, float r, float g, float b, float a);
+    using FnRenderMesh = void (*)(void* screenContext, void* tessellator, void* material);
+
+    auto tBegin  = reinterpret_cast<FnTessBegin>(resolver::tessellatorBegin());
+    auto tVertex = reinterpret_cast<FnTessVertex>(resolver::tessellatorVertex());
+    auto tColor  = reinterpret_cast<FnTessColor>(resolver::tessellatorColor());
+    
+    // Pilih render immediately yang valid
+    auto rMesh = reinterpret_cast<FnRenderMesh>(
+        resolver::meshRenderImmediately() ? resolver::meshRenderImmediately() : resolver::meshRenderImmediately2()
+    );
+
+    // Keamanan: Jika ada 1 saja alamat yang gagal di-resolve, batalkan render agar tidak crash
+    if (!tBegin || !tVertex || !tColor || !rMesh) {
+        return; 
+    }
+
     Vec3 edges[24]{};
 
     buildBoxEdges(
@@ -117,20 +139,30 @@ void renderSelectionBox(
         edges
     );
 
-    /*
-     * IMPORTANT:
-     *
-     * No Minecraft renderer call is made here yet.
-     *
-     * The geometry generation is isolated so that the
-     * confirmed vanilla rendering function can be attached
-     * later without changing the AABB logic.
-     *
-     * The edges array is intentionally local. This function
-     * currently acts as a safe rendering boundary.
-     */
+    // 2. Dapatkan Instance Tessellator dan Material
+    // SEMENTARA KITA GUNAKAN NULL/ALAMAT DUMMY JIKA BELUM ADA POINTERNYA
+    void* tessellatorInstance = reinterpret_cast<void*>(0x0); // Ganti dengan pointer Tessellator asli nanti
+    void* materialPtr = reinterpret_cast<void*>(0x0); // Ganti dengan material vanilla
 
-    (void)edges;
+    // PERHATIAN: Jika tessellatorInstance masih NULL, baris di bawah ini akan memblokir
+    // proses render agar game tidak crash. Hapus return ini setelah Anda memiliki instance yang valid!
+    if (!tessellatorInstance) {
+        return; 
+    }
+
+    // 3. Mulai Menggambar (Topology 1 = Lines, 3 = LineStrip)
+    tBegin(tessellatorInstance, 1); 
+
+    // 4. Setel Warna (Format RGBA)
+    tColor(tessellatorInstance, color.r, color.g, color.b, color.a);
+
+    // 5. Masukkan ke-24 kordinat sudut sebagai Vertex
+    for (int i = 0; i < 24; ++i) {
+        tVertex(tessellatorInstance, edges[i].x, edges[i].y, edges[i].z);
+    }
+
+    // 6. Eksekusi ke Layar
+    rMesh(screenContext, tessellatorInstance, materialPtr);
 }
 
 } // namespace outline::renderer
