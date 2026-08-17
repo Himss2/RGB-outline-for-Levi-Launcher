@@ -26,6 +26,16 @@ namespace outline::resolver {
 
 namespace {
 
+struct ModuleRange {
+std::uintptr_t base{};
+std::uintptr_t textBegin{};
+std::uintptr_t textEnd{};
+
+bool valid() const {
+return base != 0 && textBegin != 0 && textEnd > textBegin;
+}
+};
+
 ModuleRange gModule{};
 
 std::uintptr_t gRenderLevel{};
