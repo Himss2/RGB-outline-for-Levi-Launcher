@@ -7,18 +7,10 @@
 namespace outline::renderer {
 
 namespace {
-
 bool g_initialized = false;
-
 } // namespace
 
 bool initialize() {
-    /*
-     * Rendering is intentionally passive for now.
-     * We first need a confirmed vanilla selection-box
-     * rendering path for Minecraft 26.44 before installing
-     * a hook into it.
-     */
     g_initialized = true;
     return true;
 }
@@ -31,61 +23,27 @@ bool initialized() {
     return g_initialized;
 }
 
-void buildBoxEdges(
-    const AABB& box,
-    Vec3 (&edges)[24]
-) {
+void buildBoxEdges(const AABB& box, Vec3 (&edges)[24]) {
     const Vec3& a = box.min;
     const Vec3& b = box.max;
 
-    /*
-     * Bottom:
-     *
-     * 0 ---- 1
-     * |      |
-     * 3 ---- 2
-     */
-    edges[0] = {a.x, a.y, a.z};
-    edges[1] = {b.x, a.y, a.z};
+    // Bottom
+    edges[0] = {a.x, a.y, a.z}; edges[1] = {b.x, a.y, a.z};
+    edges[2] = {b.x, a.y, a.z}; edges[3] = {b.x, a.y, b.z};
+    edges[4] = {b.x, a.y, b.z}; edges[5] = {a.x, a.y, b.z};
+    edges[6] = {a.x, a.y, b.z}; edges[7] = {a.x, a.y, a.z};
 
-    edges[2] = {b.x, a.y, a.z};
-    edges[3] = {b.x, a.y, b.z};
+    // Top
+    edges[8]  = {a.x, b.y, a.z}; edges[9]  = {b.x, b.y, a.z};
+    edges[10] = {b.x, b.y, a.z}; edges[11] = {b.x, b.y, b.z};
+    edges[12] = {b.x, b.y, b.z}; edges[13] = {a.x, b.y, b.z};
+    edges[14] = {a.x, b.y, b.z}; edges[15] = {a.x, b.y, a.z};
 
-    edges[4] = {b.x, a.y, b.z};
-    edges[5] = {a.x, a.y, b.z};
-
-    edges[6] = {a.x, a.y, b.z};
-    edges[7] = {a.x, a.y, a.z};
-
-    /*
-     * Top.
-     */
-    edges[8]  = {a.x, b.y, a.z};
-    edges[9]  = {b.x, b.y, a.z};
-
-    edges[10] = {b.x, b.y, a.z};
-    edges[11] = {b.x, b.y, b.z};
-
-    edges[12] = {b.x, b.y, b.z};
-    edges[13] = {a.x, b.y, b.z};
-
-    edges[14] = {a.x, b.y, b.z};
-    edges[15] = {a.x, b.y, a.z};
-
-    /*
-     * Vertical edges.
-     */
-    edges[16] = {a.x, a.y, a.z};
-    edges[17] = {a.x, b.y, a.z};
-
-    edges[18] = {b.x, a.y, a.z};
-    edges[19] = {b.x, b.y, a.z};
-
-    edges[20] = {b.x, a.y, b.z};
-    edges[21] = {b.x, b.y, b.z};
-
-    edges[22] = {a.x, a.y, b.z};
-    edges[23] = {a.x, b.y, b.z};
+    // Vertical edges
+    edges[16] = {a.x, a.y, a.z}; edges[17] = {a.x, b.y, a.z};
+    edges[18] = {b.x, a.y, a.z}; edges[19] = {b.x, b.y, a.z};
+    edges[20] = {b.x, a.y, b.z}; edges[21] = {b.x, b.y, b.z};
+    edges[22] = {a.x, a.y, b.z}; edges[23] = {a.x, b.y, b.z};
 }
 
 void renderSelectionBox(
@@ -93,22 +51,21 @@ void renderSelectionBox(
     const SelectionBox& box,
     const Color& color
 ) {
-    if (!g_initialized) {
+    if (!g_initialized || !box.valid) {
         return;
     }
 
-    if (!box.valid || !screenContext) {
+    // 1. SANITY CHECK: Cegah pointer kosong dari engine Vanilla
+    // Memblokir crash SEGV_MAPERR awal jika screenContext belum siap
+    if (reinterpret_cast<std::uintptr_t>(screenContext) < 0x10000) {
         return;
     }
 
-    if (!std::isfinite(color.r) ||
-        !std::isfinite(color.g) ||
-        !std::isfinite(color.b) ||
-        !std::isfinite(color.a)) {
+    if (!std::isfinite(color.r) || !std::isfinite(color.g) ||
+        !std::isfinite(color.b) || !std::isfinite(color.a)) {
         return;
     }
 
-    // 1. Cast alamat memori dari resolver ke Function Pointer AArch64
     using FnTessBegin = void (*)(void* _this, int topology);
     using FnTessVertex = void (*)(void* _this, float x, float y, float z);
     using FnTessColor = void (*)(void* _this, float r, float g, float b, float a);
@@ -126,29 +83,32 @@ void renderSelectionBox(
         return; 
     }
 
-    // 2. Ekstrak Instance Tessellator dari ScreenContext (Kandidat kuat: Offset +0x30)
+    // 2. Ekstrak Kandidat Tessellator (Sesuai laporan RE: Offset +0x30)
     void* tessellatorInstance = *reinterpret_cast<void**>(
         reinterpret_cast<std::uintptr_t>(screenContext) + 0x30
     );
 
-    if (!tessellatorInstance) {
-        return; // Mencegah crash jika struktur ScreenContext berubah
+    // 3. JARING PENGAMAN UTAMA: Mencegah Crash 0x31
+    // Memastikan instans Tessellator benar-benar ada sebelum dieksekusi.
+    if (reinterpret_cast<std::uintptr_t>(tessellatorInstance) < 0x10000) {
+        return; 
     }
 
-    // 3. Kalkulasi Alamat Material UI Dinamis
-    // Menggunakan UI Material Table RVA 0x125A3280, Index 1 (ui_fill_color) = +0x10 -> 0x125A3290
     std::uintptr_t baseAddress = resolver::libraryBase();
     if (!baseAddress) {
         return;
     }
+
+    // 4. Injeksi Material UI Konkret 
+    // Menggunakan UI Material Table yang terbukti dari hasil RE (Stride 0x10, Base 0x125A3280).
+    // Index 1 (ui_fill_color) = Base + 0x125A3290.
     void* materialPtr = reinterpret_cast<void*>(baseAddress + 0x125A3290);
 
-    // 4. Bangun kordinat sudut kotak (AABB)
     Vec3 edges[24]{};
     buildBoxEdges(box.bounds, edges);
 
-    // 5. Eksekusi Mesin Gambar Minecraft (Tessellator)
-    tBegin(tessellatorInstance, 1); // Topology 1 = Lines
+    // 5. Eksekusi Render Aman
+    tBegin(tessellatorInstance, 1); // 1 = Topology Lines
 
     tColor(tessellatorInstance, color.r, color.g, color.b, color.a);
 
@@ -156,7 +116,6 @@ void renderSelectionBox(
         tVertex(tessellatorInstance, edges[i].x, edges[i].y, edges[i].z);
     }
 
-    // 6. Gambar ke Layar (X0 = screenContext, X1 = tessellator, X2 = materialPtr)
     rMesh(screenContext, tessellatorInstance, materialPtr);
 }
 
