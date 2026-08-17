@@ -62,11 +62,10 @@ void clientInstanceUpdateHook(
 
 void renderLevelHook(
     void* levelRenderer,
-    void* screenContext,
-    void* a3
+    void* screenContext
 ) {
     using Fn =
-        void (*)(void*, void*, void*);
+        void (*)(void*, void*);
 
     const auto original =
         reinterpret_cast<Fn>(
@@ -79,17 +78,28 @@ void renderLevelHook(
     if (original) {
         original(
             levelRenderer,
-            screenContext,
-            a3
+            screenContext
         );
     }
 
     /*
+     * Buat Dummy Box untuk memastikan mod merender warna merah.
+     * Jika mod berjalan, akan ada kotak merah raksasa di koordinat X:0, Y:100, Z:0
+     */
+    outline::SelectionBox dummyBox;
+    dummyBox.valid = true;
+    dummyBox.bounds.min = {0.0f, 100.0f, 0.0f};
+    dummyBox.bounds.max = {1.0f, 101.0f, 1.0f};
+
+    outline::Color redOutline = {1.0f, 0.0f, 0.0f, 1.0f};
+
+    /*
      * Then draw our overlay.
      */
-    renderer::renderSelection(
-        levelRenderer,
-        screenContext
+    renderer::renderSelectionBox(
+        screenContext,
+        dummyBox,
+        redOutline
     );
 }
 
