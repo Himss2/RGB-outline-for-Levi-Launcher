@@ -83,14 +83,22 @@ void renderLevelHook(
     }
 
     /*
+     * --- JARING PENGAMAN ---
+     * Mencegah proses render dilanjutkan jika pointer screenContext 
+     * ternyata kosong atau tidak disediakan oleh RenderLevel.
+     */
+    if (reinterpret_cast<std::uintptr_t>(screenContext) < 0x10000) {
+        return; 
+    }
+
+    /*
      * --- PENGECEKAN HOOK ---
-     * Tambahkan log ini untuk memastikan hook RenderLevel 
-     * benar-benar dieksekusi oleh game secara berkala.
+     * Menampilkan log secara berkala (sekitar 5 detik sekali pada 60 FPS)
+     * untuk mencegah spam di Logcat yang bisa membuat frame drop.
      */
     static int frameCount = 0;
-    frameCount++;
-    if (frameCount % 60 == 0) { // Tampilkan log setiap ~60 frame (sekitar 1 detik)
-        LOGI("RenderLevel Hook BEKERJA! ScreenContext: %p", screenContext);
+    if (++frameCount % 300 == 0) { 
+        LOGI("RenderLevel Hook BEKERJA! Menggambar Dummy Box.");
     }
 
     /*
