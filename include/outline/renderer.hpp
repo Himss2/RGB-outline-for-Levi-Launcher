@@ -17,6 +17,7 @@ bool initialized();
  * has been successfully resolved.
  */
 void renderSelectionBox(
+    void* screenContext,
     const SelectionBox& box,
     const Color& color
 );
