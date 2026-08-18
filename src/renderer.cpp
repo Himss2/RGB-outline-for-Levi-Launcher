@@ -55,8 +55,7 @@ void renderSelectionBox(
         return;
     }
 
-    // 1. SANITY CHECK: Cegah pointer kosong dari engine Vanilla
-    // Memblokir crash SEGV_MAPERR awal jika screenContext belum siap
+    // 1. Sanity Check ScreenContext (Mencegah SIGSEGV)
     if (reinterpret_cast<std::uintptr_t>(screenContext) < 0x10000) {
         return;
     }
@@ -75,41 +74,41 @@ void renderSelectionBox(
     auto tVertex = reinterpret_cast<FnTessVertex>(resolver::tessellatorVertex());
     auto tColor  = reinterpret_cast<FnTessColor>(resolver::tessellatorColor());
     
-    auto rMesh = reinterpret_cast<FnRenderMesh>(
-        resolver::meshRenderImmediately() ? resolver::meshRenderImmediately() : resolver::meshRenderImmediately2()
-    );
+    std::uintptr_t renderMeshAddr = resolver::meshRenderImmediately() ? 
+        resolver::meshRenderImmediately() : resolver::meshRenderImmediately2();
+
+    auto rMesh = reinterpret_cast<FnRenderMesh>(renderMeshAddr);
 
     if (!tBegin || !tVertex || !tColor || !rMesh) {
         return; 
     }
 
-    // 2. Ekstrak Kandidat Tessellator (Sesuai laporan RE: Offset +0x30)
+    // 2. Ekstrak Tessellator (ScreenContext + 0x30)
     void* tessellatorInstance = *reinterpret_cast<void**>(
         reinterpret_cast<std::uintptr_t>(screenContext) + 0x30
     );
 
-    // 3. JARING PENGAMAN UTAMA: Mencegah Crash 0x31
-    // Memastikan instans Tessellator benar-benar ada sebelum dieksekusi.
+    // 3. Jaring Pengaman Tessellator (Crash 0x31 Fix)
     if (reinterpret_cast<std::uintptr_t>(tessellatorInstance) < 0x10000) {
         return; 
     }
 
-    std::uintptr_t baseAddress = resolver::libraryBase();
-    if (!baseAddress) {
-        return;
-    }
+    // 4. Resolving MaterialPtr secara Dinamis via ARM64 ADRL Decoder
+    std::uintptr_t dynamicMat = resolver::fetchDynamicMaterialPtr(renderMeshAddr);
+    void* materialPtr = reinterpret_cast<void*>(dynamicMat);
 
-    // 4. Injeksi Material UI Konkret 
-    // Menggunakan UI Material Table yang terbukti dari hasil RE (Stride 0x10, Base 0x125A3280).
-    // Index 1 (ui_fill_color) = Base + 0x125A3290.
-    void* materialPtr = reinterpret_cast<void*>(baseAddress + 0x125A3290);
+    // Fallback ke UI Material Table (0x125A3290) jika dekoder gagal
+    if (reinterpret_cast<std::uintptr_t>(materialPtr) < 0x10000) {
+        std::uintptr_t baseAddress = resolver::libraryBase();
+        if (!baseAddress) return;
+        materialPtr = reinterpret_cast<void*>(baseAddress + 0x125A3290);
+    }
 
     Vec3 edges[24]{};
     buildBoxEdges(box.bounds, edges);
 
-    // 5. Eksekusi Render Aman
-    tBegin(tessellatorInstance, 1); // 1 = Topology Lines
-
+    // 5. Render Pass
+    tBegin(tessellatorInstance, 1);
     tColor(tessellatorInstance, color.r, color.g, color.b, color.a);
 
     for (int i = 0; i < 24; ++i) {
