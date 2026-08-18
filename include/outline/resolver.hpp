@@ -40,7 +40,7 @@ const std::vector<Candidate>& blockOutlineCandidates();
 std::uintptr_t resolve(Target target);
 const char* targetName(Target target);
 
-// --- DEKLARASI DYNAMIC ARM64 INSTRUCTION RESOLVER ---
+// --- DYNAMIC ARM64 INSTRUCTION RESOLVER ---
 std::uintptr_t resolveAdrlTarget(
     std::uintptr_t pcAddress,
     std::uint32_t adrpInst,
